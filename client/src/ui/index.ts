@@ -33,6 +33,7 @@ import { UpdateToaster } from './version';
 import { TopBar } from './topbar';
 import { UpdateBanner } from './update';
 import { FreeArea } from './viewport';
+import type { OfficeTheme } from '../world/api';
 
 /** Relógio dos tempos relativos ("há 5 s"). */
 const CLOCK_MS = 5_000;
@@ -78,7 +79,15 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
     updatePrefs(patch) {
       prefs = { ...prefs, ...patch };
       savePrefs(storage, prefs);
+      root.dataset.officeTheme = prefs.officeTheme;
       world.setOptions(worldOptionsFrom(prefs));
+      if (patch.officeTheme) {
+        void fetch('/api/theme', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ theme: patch.officeTheme }),
+        }).catch(() => {});
+      }
       invalidate();
     },
     now: () => Date.now() + skew,
@@ -168,13 +177,30 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   const scrim = h('div', { class: 'ui-scrim', attrs: { 'aria-hidden': 'true' }, on: { click: () => ctx.togglePanel('sidebar', false) } });
 
   root.classList.add('ui-root');
+  root.dataset.officeTheme = prefs.officeTheme;
   root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, tip.el, settings.el, history.el, help.el, live, splash.el);
+  if (new URLSearchParams(location.search).has("settings")) {
+    requestAnimationFrame(() => settings.toggle(topbar.settingsBtn));
+  }
   area = new FreeArea(world, { root, topbar: topbar.el, sidebar: sidebar.el, drawer: drawer.el, feed: feed.el }, () => ({
     sidebar: panels.sidebar,
     feed: panels.feed,
     drawer: selection !== null,
     narrow: ctx.isNarrow(),
   }));
+
+  const syncTheme = async () => {
+    try {
+      const response = await fetch('/api/theme', { cache: 'no-store' });
+      if (!response.ok) return;
+      const remote = (await response.json()) as { theme?: OfficeTheme };
+      if (remote.theme && remote.theme !== prefs.officeTheme) ctx.updatePrefs({ officeTheme: remote.theme });
+    } catch {
+      // Servidor reiniciando: a próxima rodada sincroniza.
+    }
+  };
+  void syncTheme();
+  const themeTimer = setInterval(() => void syncTheme(), 2_000);
 
   const components: UiComponent[] = [topbar, sidebar, drawer, terminal, history, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster];
 

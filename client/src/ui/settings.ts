@@ -59,6 +59,7 @@ export class SettingsPopover implements UiComponent {
   readonly el: HTMLElement;
   private switches = new Map<BoolPref | 'demo', SwitchRefs>();
   private bubbles: ReturnType<typeof segmented<UiPrefs['bubbles']>>;
+  private officeTheme: ReturnType<typeof segmented<UiPrefs['officeTheme']>>;
   private liveliness: ReturnType<typeof segmented<UiPrefs['liveliness']>>;
   private daylight: ReturnType<typeof segmented<UiPrefs['daylight']>>;
   private soundGroup: SoundSettingsGroup;
@@ -88,6 +89,17 @@ export class SettingsPopover implements UiComponent {
       ],
       (v) => ctx.updatePrefs({ bubbles: v }),
     );
+    this.officeTheme = segmented<UiPrefs['officeTheme']>(
+      'Tema visual',
+      [
+        ['original', 'Original'],
+        ['medieval', 'Medieval'],
+        ['horror', 'Terror'],
+        ['alien', 'Extraterrestre'],
+      ],
+      (v) => ctx.updatePrefs({ officeTheme: v }),
+    );
+    this.officeTheme.row.append(h('span', { class: 'ui-set__hint', text: 'Muda somente a aparência do escritório.' }));
     this.liveliness = segmented<UiPrefs['liveliness']>(
       'Movimento pelo escritório',
       [
@@ -128,6 +140,7 @@ export class SettingsPopover implements UiComponent {
         { class: 'ui-set-group' },
         h('h3', { text: 'Escritório' }),
         sw('showNames', 'Mostrar nomes', 'Etiqueta com o nome acima de cada personagem.', flip('showNames')),
+        this.officeTheme.row,
         this.bubbles.row,
         this.liveliness.row,
         this.daylight.row,
@@ -198,6 +211,7 @@ export class SettingsPopover implements UiComponent {
       r.btn.disabled = key === 'demo' && this.demoBusy;
     }
     this.bubbles.set(p.bubbles);
+    this.officeTheme.set(p.officeTheme);
     this.liveliness.set(p.liveliness);
     this.daylight.set(p.daylight);
     this.soundGroup.render();

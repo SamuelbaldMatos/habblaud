@@ -24,6 +24,7 @@ import { PermissionRegistry } from './permissions/registry';
 import { ClaudeWatcher } from './sources/watcher';
 import { createBuildReader } from './build';
 import { UpdateChecker } from './updates/checker';
+import { ThemeStore } from './theme';
 
 const config = loadConfig();
 const startedAt = Date.now();
@@ -40,6 +41,8 @@ if (legacyEnv) log.warn(legacyEnv);
 
 const names = new NameStore(join(config.dataDir, 'names.json'));
 names.load();
+const theme = new ThemeStore(join(config.dataDir, 'theme.json'));
+theme.load();
 
 // Office, contas e watcher se referenciam (avisos de mudança / fontes): ligação tardia.
 const late: { office?: Office; watcher?: ClaudeWatcher; permissions?: PermissionRegistry } = {};
@@ -134,6 +137,7 @@ const api = createApiHandler({
   permissions: permissions ? createPermissionRoutes(permissions) : undefined,
   stats,
   updates,
+  theme,
 });
 
 const server = http.createServer();

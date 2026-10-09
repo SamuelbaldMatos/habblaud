@@ -5,6 +5,7 @@ import { FURNITURE, TILE, type Appearance, type Dir, type FloorKind, type Furnit
 import { appearanceFromSeed, appearanceKey } from './character/appearance';
 import { HAIR, HEAD_BASE } from './character/hair';
 import { CHAR_AX, CHAR_AY, CHAR_H, CHAR_W, POSE_DURATION, POSE_FRAMES, isSeated, renderCharacter } from './character/render';
+import { renderThemedCharacter } from './character/theme-costume';
 import { PixelBuf } from './core/pixbuf';
 import type { BufSprite } from './core/sprite';
 import { drawBoard, drawClock, drawScreen, drawWindowView } from './dynamic';
@@ -159,6 +160,30 @@ describe('personagens', () => {
       keys.add(digest(s.buf.data));
     }
     expect(keys.size).toBe(40);
+  });
+
+  it('gera e preenche todos os quadros de animacao dos tres temas', () => {
+    const themes = ['medieval', 'horror', 'alien'] as const;
+    const items: HeldItem[] = ['none', 'coffee', 'laptop', 'book', 'popcorn', 'controller'];
+    for (const theme of themes) {
+      for (const pose of POSES) {
+        for (const dir of DIRS) {
+          const animated = new Set<string>();
+          for (let frame = 0; frame < POSE_FRAMES[pose]; frame++) {
+            for (const held of items) {
+              const s = renderThemedCharacter({ appearance: a, dir, pose, frame, held }, theme, 77);
+              expect(s.buf.w, `${theme}/${pose}/${dir}/${frame}/${held}`).toBe(CHAR_W);
+              expect(s.buf.h).toBe(CHAR_H);
+              expect(s.ax).toBe(CHAR_AX);
+              expect(s.ay).toBe(CHAR_AY);
+              expect(s.buf.countOpaque()).toBeGreaterThan(150);
+              if (held === 'none') animated.add(digest(s.buf.data));
+            }
+          }
+          if (POSE_FRAMES[pose] > 1) expect(animated.size, `${theme}/${pose}/${dir}`).toBeGreaterThan(1);
+        }
+      }
+    }
   });
 });
 

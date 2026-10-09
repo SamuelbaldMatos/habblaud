@@ -21,6 +21,7 @@ import {
 } from './api';
 import { appearanceFromSeed as appearanceFromSeedPure, appearanceKey } from './character/appearance';
 import { CHAR_H, CHAR_W, POSE_DURATION, POSE_FRAMES, isSeated, renderCharacter } from './character/render';
+import { renderThemedCharacter } from './character/theme-costume';
 import { shade } from './core/color';
 import { PixelBuf } from './core/pixbuf';
 import type { BufSprite } from './core/sprite';
@@ -31,10 +32,86 @@ import { CHUNK_PX, floorChunk } from './surfaces/floor';
 import { WALL_CAP_H, WALL_FACE_H, capColor, southWallTile, wallFaceTile } from './surfaces/walls';
 import { renderRug } from './surfaces/rug';
 import { roomTheme as roomThemePure } from './theme';
+import type { OfficeTheme } from '../world/api';
 
 export * from './api';
 export { hash32 };
 export { drawBoard, drawClock, drawScreen, drawWindowView, footballLance };
+
+let officeTheme: OfficeTheme = 'original';
+export function setOfficeTheme(theme: OfficeTheme): void {
+  officeTheme = theme;
+}
+
+function costumeAppearance(a: Appearance): Appearance {
+  if (officeTheme === 'original') return a;
+  const n = hash32(appearanceKey(a));
+  if (officeTheme === 'medieval') {
+    const cloth = ['#6f2638', '#294f35', '#243f68', '#6b4825'][n % 4];
+    return { ...a, top: cloth, topAccent: '#d6ad4d', bottom: '#30251f', shoes: '#241b18', topStyle: 'jacket' };
+  }
+  if (officeTheme === 'horror') {
+    const cloth = ['#17171a', '#242126', '#30252a'][n % 3];
+    return { ...a, top: cloth, topAccent: n % 2 ? '#6f101c' : '#77716b', bottom: '#121216', shoes: '#09090b', topStyle: 'jacket' };
+  }
+  const suit = ['#d4e2e4', '#687d91', '#433866'][n % 3];
+  return { ...a, top: suit, topAccent: n % 2 ? '#42f5d4' : '#bd77ff', bottom: '#263447', shoes: '#121d2b', topStyle: 'jacket' };
+}
+
+function decorateCostume(s: BufSprite, seed: number): BufSprite {
+  if (officeTheme === 'original') return s;
+  const b = s.buf;
+  const n = hash32(String(seed));
+  if (officeTheme === 'medieval') {
+    const gold = '#e5bd57';
+    // Broche e cinto de guilda; alguns usam coroa, outros capuz/pena.
+    b.set(11, 20, gold);
+    b.set(12, 20, gold);
+    for (let x = 8; x <= 15; x++) b.set(x, 24, x === 11 || x === 12 ? gold : '#3c281c');
+    if (n % 3 === 0) {
+      for (let x = 8; x <= 15; x++) b.set(x, 5, gold);
+      b.set(8, 3, gold); b.set(11, 2, gold); b.set(15, 3, gold);
+    } else if (n % 3 === 1) {
+      b.set(17, 7, '#d7c07b'); b.set(18, 5, '#d7c07b'); b.set(19, 3, '#efe0a5');
+    }
+  } else if (officeTheme === 'horror') {
+    // Uniforme vitoriano gasto, costuras e manchas escuras — horror sério, sem Halloween cômico.
+    for (let y = 19; y <= 26; y += 3) b.set(8 + ((y + n) % 7), y, '#08080a');
+    b.set(11, 20, '#8a1422'); b.set(12, 21, '#4c0b12');
+    if (n % 4 === 0) {
+      b.set(7, 10, '#d8d2c8'); b.set(8, 9, '#d8d2c8');
+      b.set(15, 10, '#d8d2c8'); b.set(14, 9, '#d8d2c8');
+    }
+  } else {
+    // Macacão espacial, visor emissivo e antena/capacete variável.
+    const glow = n % 2 ? '#42f5d4' : '#bd77ff';
+    for (let x = 8; x <= 15; x++) b.set(x, 12, glow);
+    b.set(11, 20, glow); b.set(12, 20, glow);
+    b.set(12, 4, '#8799aa'); b.set(12, 2, glow);
+    if (n % 3 === 0) { b.set(6, 8, '#8799aa'); b.set(17, 8, '#8799aa'); }
+  }
+  return s;
+}
+
+const NATURAL_FURNITURE = new Set<FurnitureKind>(['plant_small', 'plant_tall']);
+
+/** Recolore o sprite existente sem mudar âncora, footprint, estados ou regiões interativas. */
+function themeFurniture(s: BufSprite, kind: FurnitureKind): void {
+  if (officeTheme === 'original' || NATURAL_FURNITURE.has(kind)) return;
+  const ramps: Record<Exclude<OfficeTheme, 'original'>, readonly [number, number, number][]> = {
+    medieval: [[35, 24, 18], [91, 57, 31], [151, 102, 48], [222, 181, 83]],
+    horror: [[8, 8, 10], [29, 26, 30], [70, 55, 58], [126, 103, 96]],
+    alien: [[7, 22, 35], [20, 60, 82], [53, 132, 151], [92, 244, 218]],
+  };
+  const ramp = ramps[officeTheme];
+  const d = s.buf.data;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 16) continue;
+    const lum = (d[i] * 0.2126 + d[i + 1] * 0.7152 + d[i + 2] * 0.0722) / 255;
+    const p = ramp[Math.min(3, Math.floor(lum * 4))];
+    d[i] = p[0]; d[i + 1] = p[1]; d[i + 2] = p[2];
+  }
+}
 
 // ------------------------------------------------------------------ canvas e cache
 
@@ -102,15 +179,17 @@ export function characterSprite(req: CharacterFrameRequest): Sprite {
   const n = poseFrameCount(req.pose);
   const frame = ((Math.floor(req.frame) % n) + n) % n;
   const seated = isSeated(req.pose, req.seated);
-  const key = `${keyOf(req.appearance)}|${req.dir}|${req.pose}|${frame}|${req.held ?? 'none'}|${seated ? 1 : 0}`;
-  return charCache.get(key, () => toSprite(renderCharacter({ ...req, frame, seated })));
+  const key = `${officeTheme}|${keyOf(req.appearance)}|${req.dir}|${req.pose}|${frame}|${req.held ?? 'none'}|${seated ? 1 : 0}`;
+  return charCache.get(key, () => {
+    return toSprite(renderThemedCharacter({ ...req, frame, seated }, officeTheme, hash32(keyOf(req.appearance))));
+  });
 }
 
 export function avatarCanvas(seed: number, opts: { look?: 'f' | 'm'; sub?: boolean; scale?: number } = {}): HTMLCanvasElement {
   const scale = Math.max(1, Math.round(opts.scale ?? 3));
-  const key = `${seed}|${opts.look ?? '-'}|${opts.sub ? 1 : 0}|${scale}`;
+  const key = `${officeTheme}|${seed}|${opts.look ?? '-'}|${opts.sub ? 1 : 0}|${scale}`;
   return avatarCache.get(key, () => {
-    const s = renderCharacter({ appearance: appearanceFromSeedPure(seed, opts), dir: 'down', pose: 'stand', frame: 0 });
+    const s = renderThemedCharacter({ appearance: appearanceFromSeedPure(seed, opts), dir: 'down', pose: 'stand', frame: 0 }, officeTheme, seed);
     // Busto: cabeça + ombros (20x20 a partir do topo do cabelo).
     const crop = s.buf.crop(2, 2, CHAR_W - 4, 20);
     const out = new PixelBuf(crop.w * scale, crop.h * scale);
@@ -132,11 +211,28 @@ export function avatarCanvas(seed: number, opts: { look?: 'f' | 'm'; sub?: boole
 // ------------------------------------------------------------------ móveis e ícones
 
 export function furnitureSprites(kind: FurnitureKind, variant?: string, state?: number, opts: { seed?: number } = {}): FurnitureSprites {
+  if (officeTheme === 'medieval') {
+    if (kind === 'desk' || kind === 'desk_back') variant = 'wood';
+    if (kind === 'office_chair' || kind === 'office_chair_front') variant = 'red';
+  } else if (officeTheme === 'horror') {
+    if (kind === 'desk' || kind === 'desk_back') variant = 'dark';
+    if (kind === 'office_chair' || kind === 'office_chair_front') variant = 'black';
+  } else if (officeTheme === 'alien') {
+    if (kind === 'desk' || kind === 'desk_back') variant = 'white';
+    if (kind === 'office_chair' || kind === 'office_chair_front') variant = 'blue';
+  }
   // Chave normalizada: sementes/variantes equivalentes compartilham o mesmo canvas.
   const n = normalizeFurniture(kind, variant, state, opts.seed);
-  const key = `${kind}|${n.variant ?? '-'}|${n.state}|${n.vseed}`;
+  const key = `${officeTheme}|${kind}|${n.variant ?? '-'}|${n.state}|${n.vseed}`;
   return furnCache.get(key, () => {
     const f = renderFurniture(kind, n.variant, n.state, n.vseed);
+    themeFurniture(f.base, kind);
+    if (f.front) themeFurniture(f.front, kind);
+    const accent = officeTheme === 'medieval' ? '#d6ad4d' : officeTheme === 'horror' ? '#65101b' : officeTheme === 'alien' ? '#42f5d4' : null;
+    if (accent && f.base.buf.w > 8 && f.base.buf.h > 5) {
+      const y = f.base.buf.h - 4;
+      for (let x = 3; x < f.base.buf.w - 3; x += officeTheme === 'alien' ? 3 : 7) f.base.buf.set(x, y, accent);
+    }
     return { base: toSprite(f.base), front: f.front ? toSprite(f.front) : undefined };
   });
 }
@@ -146,7 +242,7 @@ export function iconSprite(name: IconName): Sprite {
 }
 
 export function roomTheme(seed: number): RoomTheme {
-  return roomThemePure(seed);
+  return roomThemePure(seed, officeTheme);
 }
 
 // ------------------------------------------------------------------ pisos, tapetes e paredes

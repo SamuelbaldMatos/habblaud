@@ -10,6 +10,7 @@ import { handleSessionsRoute } from './sessions';
 import type { Hub } from './sse';
 import { handleStatsRoute } from './stats';
 import type { TerminalStreams } from './terminal';
+import { isOfficeTheme, type OfficeTheme } from '../theme';
 
 export interface ApiDeps {
   office: Office;
@@ -38,6 +39,8 @@ export interface ApiDeps {
     status(): UpdateStatus;
     check(opts: { manual?: boolean }): Promise<UpdateStatus>;
   };
+  /** Tema visual global, compartilhado inclusive com o perfil do wallpaper. */
+  theme?: { get(): OfficeTheme; set(theme: OfficeTheme): void };
 }
 
 /** GET /api/agents/:id/terminal (ids nunca contêm '/'). */
@@ -198,6 +201,20 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           accounts: accounts.entries().map((a) => ({ id: a.id, usageStatus: accounts.usageView(a.id).status })),
         });
       }
+      return true;
+    }
+    if (path === '/api/theme' && deps.theme) {
+      if (isRead) sendJson(res, 200, { theme: deps.theme.get() });
+      else if (method === 'POST') {
+        readJson(req)
+          .then((body) => {
+            const theme = (body as { theme?: unknown })?.theme;
+            if (!isOfficeTheme(theme)) throw new HttpError(400, 'tema inválido');
+            deps.theme!.set(theme);
+            sendJson(res, 200, { ok: true, theme });
+          })
+          .catch((err) => fail(res, err));
+      } else methodNotAllowed(res, 'GET, POST');
       return true;
     }
     if (path === '/api/mod/summary') {

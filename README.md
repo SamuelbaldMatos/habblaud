@@ -202,6 +202,29 @@ não ficarem dois capturando o uso ou respondendo o mesmo pedido.
 
 </details>
 
+### Usar como papel de parede no Windows
+
+Com o Habblaud rodando em `http://127.0.0.1:4747`, ele pode ocupar a camada do papel de
+parede do Windows sem instalar outro aplicativo. O launcher abre uma janela isolada do Edge,
+coloca-a atrás dos ícones da área de trabalho e mantém a animação ativa em segundo plano:
+
+```powershell
+npm run wallpaper:start       # iniciar agora
+npm run wallpaper:stop        # encerrar
+npm run wallpaper:install     # iniciar agora e junto com o Windows
+npm run wallpaper:uninstall   # remover da inicialização e encerrar
+```
+
+O modo espera até 120 segundos pelo servidor durante a inicialização do computador e se
+reconecta à camada da área de trabalho caso o Explorer seja reiniciado. Por padrão usa
+`http://127.0.0.1:4747`; defina `HABBLAUD_WALLPAPER_URL` para usar outro endereço local.
+
+Enquanto estiver ativo, o Habblaud fica na bandeja do sistema (a seta ao lado do relogio).
+Um clique duplo abre diretamente as configuracoes em uma janela de aplicativo, sem abas ou
+barra do navegador. O menu do botao direito tambem troca o tema e encerra o papel de parede.
+
+Os registros ficam em `%LOCALAPPDATA%\Habblaud\wallpaper\wallpaper.log`.
+
 ### Abrir no celular (opcional)
 
 Por padrão o Habblaud só aceita conexões do próprio computador. Para abrir no celular (no mesmo Wi-Fi), com Docker:

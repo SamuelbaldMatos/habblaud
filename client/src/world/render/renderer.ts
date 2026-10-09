@@ -2,7 +2,7 @@
 // ordenadas por profundidade -> luz/escuridão -> ícones. A passada em espaço de tela (texto
 // nítido) fica em overlay.ts.
 import { TILE, type ArtModule, type CharacterFrameRequest, type IconName, type ScreenMode, type Sprite } from '../../art/api';
-import type { WorldOptions } from '../api';
+import type { OfficeTheme, WorldOptions } from '../api';
 import type { WorldAssets } from '../assets';
 import type { Camera } from '../camera';
 import { BUILDING_H, COL_W, CORE_COLS, CORRIDOR_Y } from '../constants';
@@ -14,6 +14,7 @@ import type { Character } from '../sim/character';
 import type { RoomState } from '../sim/room-state';
 import { cobwebScale, hourglassIcon, HOURGLASS_FLIP_MS, STORM_LIFT } from '../sim/shell';
 import type { Sim } from '../sim/sim';
+import { visualForCharacter, type ThemeActivityVisual, type ThemeEffect } from '../themes';
 import { buildAnim, furnitureScale, NO_ANIM, sweepDelay, type BuildAnim } from './anim';
 import { daylightModeOf, parseHourParam } from './daylight';
 import { RoomFxRenderer } from './github-fx';
@@ -21,6 +22,7 @@ import { Lighting } from './lighting';
 import { Particles } from './particles';
 import { carSprite, propSprite, shadowSprite } from './props';
 import { countBadge, fallbackIcon } from './shell-sprites';
+import { themeEffectFrameCount, themeEffectSprite } from './theme-sprites';
 import { buildAreaVis, furnitureSprites, opaqueBounds, paintShell, toWallVis, WALL_MARGIN, wallItemOrigin, wallSprites, type AreaVis, type FurnVis, type WallVis } from './scene';
 
 const enum K {
@@ -114,6 +116,7 @@ export class Renderer {
   night = 0;
   private clearColor = '#7fae62';
   private grass: CanvasPattern | null = null;
+  private activeTheme: OfficeTheme = 'original';
 
   constructor(
     readonly canvas: HTMLCanvasElement,
@@ -315,6 +318,7 @@ export class Renderer {
   // =================================================================== frame
 
   frame(now: number, dt: number, opts: WorldOptions, sel: { agent: string | null; room: string | null; hover: string | null }): void {
+    this.activeTheme = opts.officeTheme;
     const { ctx, camera } = this;
     this.date.setTime(this.clock());
     this.dt = dt;
@@ -386,6 +390,7 @@ export class Renderer {
     const view = { x0: vx0, y0: vy0, x1: vx1, y1: vy1 };
     // alarme de CI: tom vermelho no piso (por baixo dos móveis e personagens)
     this.roomFx.drawFloor(ctx, this.sim, now, view);
+    this.drawThemeWorld(opts.officeTheme, now, vx0, vy0, vx1, vy1);
 
     // ---- entidades ordenadas por profundidade
     const ents = this.ents;
@@ -511,6 +516,101 @@ export class Renderer {
       }
     }
     ctx.globalAlpha = 1;
+    this.drawThemeAtmosphere(opts, now, W, H);
+  }
+
+  /** Camada puramente visual em espaço de tela; não interfere na simulação. */
+  private drawThemeAtmosphere(opts: WorldOptions, now: number, w: number, h: number): void {
+    if (opts.officeTheme === 'original') return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (opts.officeTheme === 'medieval') {
+      ctx.fillStyle = 'rgba(92,48,12,0.10)';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = 'rgba(255,190,75,0.38)';
+      for (let i = 0; i < 18; i++) {
+        const x = (i * 977 + now * (0.008 + (i % 3) * 0.002)) % w;
+        const y = h - ((i * 431 + now * 0.012) % h);
+        ctx.fillRect(Math.round(x), Math.round(y), i % 4 === 0 ? 3 : 2, 2);
+      }
+    } else if (opts.officeTheme === 'horror') {
+      // Tom estável: nada de flash/piscar a tela inteira.
+      ctx.fillStyle = 'rgba(18,0,4,0.16)';
+      ctx.fillRect(0, 0, w, h);
+      const fogY = (Math.sin(now / 5000) * 0.08 + 0.76) * h;
+      const fog = ctx.createLinearGradient(0, fogY - 90, 0, fogY + 100);
+      fog.addColorStop(0, 'rgba(120,130,120,0)');
+      fog.addColorStop(0.5, 'rgba(120,130,120,0.12)');
+      fog.addColorStop(1, 'rgba(70,75,72,0)');
+      ctx.fillStyle = fog;
+      ctx.fillRect(0, fogY - 90, w, 190);
+    } else {
+      ctx.fillStyle = 'rgba(0,38,55,0.12)';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = 'rgba(77,255,224,0.055)';
+      const offset = Math.floor(now / 45) % 6;
+      for (let y = offset; y < h; y += 6) ctx.fillRect(0, y, w, 1);
+      ctx.fillStyle = 'rgba(134,92,255,0.22)';
+      const scan = Math.floor((now / 9) % (h + 80)) - 40;
+      ctx.fillRect(0, scan, w, 2);
+    }
+    ctx.restore();
+  }
+
+  /** Cenário temático em coordenadas do mundo, principalmente além das paredes do escritório. */
+  private drawThemeWorld(theme: OfficeTheme, now: number, vx0: number, vy0: number, vx1: number, vy1: number): void {
+    if (theme === 'original') return;
+    const ctx = this.ctx;
+    const south = BUILDING_H * TILE;
+    ctx.save();
+    if (theme === 'medieval') {
+      // Tochas na fachada e vaga-lumes no bosque.
+      for (let x = 2 * TILE; x < this.sim.building.cols * COL_W * TILE; x += 6 * TILE) {
+        const flame = 2 + Math.round(Math.sin(now / 90 + x) * 1);
+        ctx.fillStyle = '#54321f'; ctx.fillRect(x - 1, south - 11, 3, 10);
+        ctx.fillStyle = '#ff8a2b'; ctx.fillRect(x - 2, south - 14 - flame, 5, 5 + flame);
+        ctx.fillStyle = '#ffe17a'; ctx.fillRect(x - 1, south - 13 - flame, 3, 3 + flame);
+      }
+      ctx.fillStyle = '#d9ef78';
+      for (let i = 0; i < 28; i++) {
+        const x = vx0 + ((i * 173 + now * 0.009) % Math.max(1, vx1 - vx0));
+        const y = vy0 + ((i * 97 + Math.sin(now / 800 + i) * 18) % Math.max(1, vy1 - vy0));
+        if (y < 0 || y > south) ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
+      }
+    } else if (theme === 'horror') {
+      // Morcegos distantes, névoa rasteira e sombras que atravessam o terreno.
+      ctx.strokeStyle = 'rgba(5,3,6,0.85)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 9; i++) {
+        const x = vx0 + ((i * 211 + now * (0.012 + i * 0.001)) % Math.max(1, vx1 - vx0));
+        const y = -30 - (i % 4) * 22 + Math.sin(now / 310 + i) * 7;
+        ctx.beginPath(); ctx.moveTo(x - 5, y); ctx.lineTo(x, y + 3); ctx.lineTo(x + 5, y); ctx.stroke();
+      }
+      const fog = ctx.createLinearGradient(0, south - 10, 0, south + 130);
+      fog.addColorStop(0, 'rgba(110,116,108,0)');
+      fog.addColorStop(0.6, 'rgba(110,116,108,0.16)');
+      fog.addColorStop(1, 'rgba(35,38,36,0)');
+      ctx.fillStyle = fog;
+      ctx.fillRect(vx0, south - 10 + Math.sin(now / 2600) * 7, vx1 - vx0, 140);
+    } else {
+      // Nave patrulhando o exterior, feixe de varredura e sondas luminosas.
+      const span = Math.max(200, vx1 - vx0 + 160);
+      const ux = vx0 - 80 + ((now * 0.025) % span);
+      const uy = -54 + Math.sin(now / 900) * 9;
+      ctx.fillStyle = 'rgba(83,255,225,0.10)';
+      ctx.beginPath(); ctx.moveTo(ux - 8, uy + 8); ctx.lineTo(ux - 34, 26); ctx.lineTo(ux + 34, 26); ctx.lineTo(ux + 8, uy + 8); ctx.fill();
+      ctx.fillStyle = '#20283d'; ctx.fillRect(ux - 18, uy, 36, 7);
+      ctx.fillStyle = '#bd77ff'; ctx.fillRect(ux - 11, uy - 4, 22, 5);
+      ctx.fillStyle = '#42f5d4';
+      for (let x = -10; x <= 10; x += 5) ctx.fillRect(ux + x, uy + 6, 2, 2);
+      for (let i = 0; i < 12; i++) {
+        const x = vx0 + ((i * 149 + Math.sin(now / 550 + i) * 24) % Math.max(1, vx1 - vx0));
+        const y = south + 25 + (i % 5) * 24 + Math.sin(now / 420 + i) * 6;
+        ctx.fillRect(Math.round(x), Math.round(y), 2, 2);
+      }
+    }
+    ctx.restore();
   }
 
   private headOf(ch: Character): HeadInfo {
@@ -621,7 +721,11 @@ export class Renderer {
         const live = this.sim.social.tvScreen();
         const mode = live ? live.mode : TV_MODES[Math.floor(now / 9000) % TV_MODES.length];
         const seed = live ? live.seed : w.seed;
-        if (r) this.safe(() => this.art.drawScreen(ctx, { x: o.x + r.x, y: o.y + rise + r.y, w: r.w, h: r.h }, mode, now, seed));
+        if (r) {
+          const screen = { x: o.x + r.x, y: o.y + rise + r.y, w: r.w, h: r.h };
+          this.safe(() => this.art.drawScreen(ctx, screen, mode, now, seed));
+          this.drawThemeScreen(screen, now, seed);
+        }
         return;
       }
       case 'mirror': {
@@ -749,17 +853,47 @@ export class Renderer {
       if (f.kind === 'desk' && s.rects?.screen) {
         const r = s.rects.screen;
         const mode = this.deskScreen(f, area);
-        this.safe(() => this.art.drawScreen(ctx, { x: dx + r.x, y: dy + r.y, w: r.w, h: r.h }, mode, now, f.seed));
+        const screen = { x: dx + r.x, y: dy + r.y, w: r.w, h: r.h };
+        this.safe(() => this.art.drawScreen(ctx, screen, mode, now, f.seed));
+        this.drawThemeScreen(screen, now, f.seed);
       } else if (f.kind === 'coffee_machine' && state === 1) {
         this.drawSteam(f.ax, dy + 2, now, f.seed);
       } else if (f.kind === 'arcade' && s.rects?.screen) {
         // duelo no fliperama: as duas máquinas mostram a partida
         const seed = this.sim.social.arcadeSeed();
         const r = s.rects.screen;
-        if (seed !== null) this.safe(() => this.art.drawScreen(ctx, { x: dx + r.x, y: dy + r.y, w: r.w, h: r.h }, 'game', now, seed));
+        if (seed !== null) {
+          const screen = { x: dx + r.x, y: dy + r.y, w: r.w, h: r.h };
+          this.safe(() => this.art.drawScreen(ctx, screen, 'game', now, seed));
+          this.drawThemeScreen(screen, now, seed);
+        }
       }
     }
     if (scaled) ctx.restore();
+  }
+
+  private drawThemeScreen(r: { x: number; y: number; w: number; h: number }, now: number, seed: number): void {
+    if (this.activeTheme === 'original') return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+    if (this.activeTheme === 'medieval') {
+      ctx.fillStyle = '#3b2415'; ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = '#efc75d';
+      for (let i = 0; i < 4; i++) ctx.fillRect(r.x + 2 + ((seed + i * 5) % Math.max(2, r.w - 3)), r.y + 2 + i * 3, 1, 3);
+      ctx.strokeStyle = '#9d682b'; ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+    } else if (this.activeTheme === 'horror') {
+      ctx.fillStyle = '#08090a'; ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = `rgba(125,15,25,${0.45 + Math.sin(now / 90) * 0.2})`;
+      for (let y = r.y + ((now / 55) | 0) % 4; y < r.y + r.h; y += 4) ctx.fillRect(r.x, y, r.w, 1);
+      ctx.fillStyle = '#d5ccc0'; ctx.fillRect(r.x + Math.floor(r.w / 2), r.y + Math.floor(r.h / 2), 1, 1);
+    } else {
+      ctx.fillStyle = '#071d2b'; ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = '#42f5d4';
+      for (let x = r.x + 1; x < r.x + r.w; x += 4) { ctx.beginPath(); ctx.moveTo(x, r.y); ctx.lineTo(x, r.y + r.h); ctx.stroke(); }
+      ctx.fillStyle = '#bd77ff'; ctx.fillRect(r.x, r.y + (((now / 80) | 0) % Math.max(1, r.h)), r.w, 1);
+    }
+    ctx.restore();
   }
 
   /** Tela do monitor: segue a atividade de quem senta ali. */
@@ -795,8 +929,14 @@ export class Renderer {
     const { ctx } = this;
     const head = this.headOf(ch);
     // faixa lateral de quem anda (dois no mesmo caminho não viram um boneco de duas cabeças)
-    const x = Math.round(ch.x + ch.offX);
-    const y = Math.round(ch.y + ch.offY);
+    let themeDx = 0;
+    let themeDy = 0;
+    const phase = (ch.info.seed % 997) / 997 * Math.PI * 2;
+    if (this.activeTheme === 'medieval') themeDy = ch.pose === 'walk' || ch.pose === 'run' ? Math.round(Math.sin(ch.animT / 80 + phase)) : 0;
+    else if (this.activeTheme === 'horror') themeDx = Math.sin(now / 47 + phase) > 0.985 ? 1 : 0;
+    else if (this.activeTheme === 'alien') themeDy = Math.round(Math.sin(now / 430 + phase) * 1.5);
+    const x = Math.round(ch.x + ch.offX + themeDx);
+    const y = Math.round(ch.y + ch.offY + themeDy);
     ctx.globalAlpha = ch.alpha;
     // anéis no chão (seleção, hover, alerta)
     if (ch.mode === 'wait') this.drawAlertRing(x, y, now);
@@ -813,6 +953,9 @@ export class Renderer {
     req.pose = ch.pose;
     req.held = ch.held;
     req.seated = ch.seated;
+    const themeVisual = visualForCharacter(this.activeTheme, ch);
+    if (themeVisual?.pose) req.pose = themeVisual.pose;
+    if (themeVisual?.held) req.held = themeVisual.held;
     try {
       sprite = this.charSprite(req, ch.animT);
     } catch {
@@ -850,6 +993,7 @@ export class Renderer {
     head.feetY = y;
     head.visible = true;
     head.depth = ch.depth();
+    this.drawCharacterThemeFrames(themeVisual, ch, x, y, now);
     // ícone sobre a cabeça (desenhado depois da luz)
     let name: IconName | null = ch.mode === 'wait' ? 'alert' : ch.icon;
     const shell = ch.mode === 'shell' && ch.shellSince > 0 && !ch.leaving;
@@ -884,6 +1028,26 @@ export class Renderer {
       const py = y - 1 - (POPCORN_DY[ch.dir] ?? 10);
       this.particles.popcorn(px, py);
       if (Math.random() < 0.3) this.particles.popcorn(px, py);
+    }
+  }
+
+  /** Alterna sprites estaticos preconstruidos; nenhuma forma e improvisada no cenario. */
+  private drawCharacterThemeFrames(visual: ThemeActivityVisual | null, ch: Character, x: number, y: number, now: number): void {
+    if (!visual || this.activeTheme === 'original') return;
+    const draw = (effect: ThemeEffect, ox: number, oy: number, speed: number) => {
+      const count = themeEffectFrameCount(effect);
+      const frame = (Math.floor(now / speed) + (ch.info.seed % count)) % count;
+      const s = themeEffectSprite(this.activeTheme, effect, frame);
+      this.ctx.drawImage(s.canvas, Math.round(x + ox - s.ax), Math.round(y + oy - s.ay));
+    };
+    if (visual.effect) draw(visual.effect, 0, ch.seated ? 0 : -2, 130);
+    if (visual.companion) {
+      const orbit = [
+        [-22, -25], [-15, -33], [0, -37], [16, -33], [23, -24], [16, -18], [0, -15], [-16, -18],
+      ] as const;
+      const frame = (Math.floor(now / 150) + ch.info.seed) % orbit.length;
+      const [ox, oy] = orbit[frame];
+      draw(visual.companion, ox, oy, 110);
     }
   }
 
@@ -1076,7 +1240,7 @@ export class Renderer {
       this.ctx.globalAlpha = 1;
       return;
     }
-    const s = propSprite(prop);
+    const s = propSprite(prop, this.activeTheme);
     if (alpha < 1) this.ctx.globalAlpha = alpha;
     this.ctx.drawImage(s.canvas, Math.round(prop.x - s.ax), Math.round(prop.y - s.ay));
     this.ctx.globalAlpha = 1;
@@ -1101,7 +1265,7 @@ export class Renderer {
   }
 
   private drawCar(car: Car): void {
-    const s = carSprite(car.variant, car.dir < 0);
+    const s = carSprite(car.variant, car.dir < 0, this.activeTheme);
     this.ctx.drawImage(s.canvas, Math.round(car.x - s.ax), Math.round(car.y - s.ay));
   }
 

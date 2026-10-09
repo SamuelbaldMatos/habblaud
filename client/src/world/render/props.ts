@@ -2,6 +2,7 @@
 // visuais do mundo (sombra, brilhos). Mesma direção de arte do módulo de arte: contorno
 // cinza-azulado escuro, 3–4 tons por material, luz vinda de cima/esquerda.
 import { mulberry32 } from '../../../../shared/hash';
+import type { OfficeTheme } from '../api';
 import type { ExteriorProp } from '../layout/types';
 
 export interface PropSprite {
@@ -321,8 +322,32 @@ function totemSprite(): PropSprite {
   return { canvas: c, ax: 7, ay: 32 };
 }
 
-export function propSprite(prop: ExteriorProp): PropSprite {
-  const key = prop.kind === 'lamp' || prop.kind === 'bench' || prop.kind === 'totem' ? prop.kind : `${prop.kind}:${prop.seed % 7}`;
+function applyThemeTint(s: PropSprite, theme: OfficeTheme): PropSprite {
+  if (theme === 'original') return s;
+  const [c, ctx] = makeCanvas(s.canvas.width, s.canvas.height);
+  ctx.drawImage(s.canvas, 0, 0);
+  ctx.globalCompositeOperation = 'source-atop';
+  ctx.globalAlpha = theme === 'horror' ? 0.72 : 0.58;
+  ctx.fillStyle = theme === 'medieval' ? '#6b4728' : theme === 'horror' ? '#17151a' : '#173f58';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  if (theme === 'alien') {
+    ctx.fillStyle = '#42f5d4';
+    ctx.fillRect(Math.max(0, Math.round(s.ax) - 1), Math.max(0, Math.round(s.ay) - 5), 2, 2);
+  } else if (theme === 'horror' && c.width > 8) {
+    ctx.fillStyle = '#6f101c';
+    ctx.fillRect(Math.max(1, Math.round(s.ax) - 1), Math.max(1, Math.round(s.ay) - 7), 1, 4);
+  } else if (theme === 'medieval' && c.width > 8) {
+    ctx.fillStyle = '#d6ad4d';
+    ctx.fillRect(Math.max(1, Math.round(s.ax) - 2), Math.max(1, Math.round(s.ay) - 5), 4, 1);
+  }
+  return { canvas: c, ax: s.ax, ay: s.ay };
+}
+
+export function propSprite(prop: ExteriorProp, theme: OfficeTheme = 'original'): PropSprite {
+  const baseKey = prop.kind === 'lamp' || prop.kind === 'bench' || prop.kind === 'totem' ? prop.kind : `${prop.kind}:${prop.seed % 7}`;
+  const key = `${theme}:${baseKey}`;
   let s = cache.get(key);
   if (s) return s;
   switch (prop.kind) {
@@ -360,6 +385,7 @@ export function propSprite(prop: ExteriorProp): PropSprite {
       // 'paving' e outros tipos desenhados pelo próprio renderer
       s = { canvas: makeCanvas(1, 1)[0], ax: 0, ay: 0 };
   }
+  s = applyThemeTint(s, theme);
   cache.set(key, s);
   return s;
 }
@@ -374,8 +400,8 @@ const CAR_COLORS: [string, string, string][] = [
 ];
 
 /** Carro visto de lado (3/4), virado para a direita; `flip` desenha para a esquerda. */
-export function carSprite(variant: number, flip: boolean): PropSprite {
-  const key = `car:${variant % CAR_COLORS.length}:${flip ? 1 : 0}`;
+export function carSprite(variant: number, flip: boolean, theme: OfficeTheme = 'original'): PropSprite {
+  const key = `car:${theme}:${variant % CAR_COLORS.length}:${flip ? 1 : 0}`;
   const hit = cache.get(key);
   if (hit) return hit;
   const [body, dark, light] = CAR_COLORS[variant % CAR_COLORS.length];
@@ -419,7 +445,8 @@ export function carSprite(variant: number, flip: boolean): PropSprite {
     ctx.fillStyle = '#9aa3b5';
     ctx.fillRect(wx + 2, 15, 1, 1);
   }
-  const s = { canvas: c, ax: 18, ay: 17 };
+  let s = { canvas: c, ax: 18, ay: 17 };
+  s = applyThemeTint(s, theme);
   cache.set(key, s);
   return s;
 }

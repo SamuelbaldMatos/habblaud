@@ -23,6 +23,7 @@ const art: ArtModule = artModule;
 
 export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): WorldApi & { debug: WorldDebug } {
   let options: WorldOptions = { ...DEFAULT_WORLD_OPTIONS };
+  artModule.setOfficeTheme(options.officeTheme);
   const camera = new Camera();
   // Simulação e desenho são recriados quando o timelapse entra, pula ou sai (rebuild).
   let sim = new Sim(art, () => options);
@@ -342,7 +343,18 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
     },
     getOptions: () => ({ ...options }),
     setOptions: (o) => {
+      const themeChanged = o.officeTheme !== undefined && o.officeTheme !== options.officeTheme;
       options = { ...options, ...o };
+      if (themeChanged) {
+        artModule.setOfficeTheme(options.officeTheme);
+        // Tema é somente visual: mantém a simulação e todos os funcionários já carregados.
+        renderer = new Renderer(canvas, art, sim, camera);
+        if (assets) renderer.setAssets(assets);
+        if (playback) renderer.clock = () => playback!.clock();
+        overlay = new Overlay(renderer.ctx, sim, renderer, camera);
+        debug = createDebug(sim, renderer, camera, markMoved);
+        lastCols = -1;
+      }
       if (o.followSelected !== undefined) camera.follow = o.followSelected && selection?.type === 'agent' ? selection.id : null;
     },
     setViewInsets: (ins) => {

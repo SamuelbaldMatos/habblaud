@@ -54,8 +54,15 @@ describe('preferências', () => {
     expect(() => savePrefs(broken, DEFAULT_PREFS)).not.toThrow();
   });
   it('extrai só as opções do mundo', () => {
-    expect(worldOptionsFrom({ ...DEFAULT_PREFS, daylight: 'day' })).toEqual({ showNames: true, bubbles: 'important', liveliness: 'normal', dayNight: false, daylight: 'day' });
+    expect(worldOptionsFrom({ ...DEFAULT_PREFS, daylight: 'day' })).toEqual({ officeTheme: 'original', showNames: true, bubbles: 'important', liveliness: 'normal', dayNight: false, daylight: 'day' });
     expect(worldOptionsFrom({ ...DEFAULT_PREFS, daylight: 'night' })).toMatchObject({ dayNight: true, daylight: 'night' });
+  });
+  it('tema visual: valida as quatro opções', () => {
+    expect(DEFAULT_PREFS.officeTheme).toBe('original');
+    expect(sanitizePrefs({ officeTheme: 'medieval' }).officeTheme).toBe('medieval');
+    expect(sanitizePrefs({ officeTheme: 'horror' }).officeTheme).toBe('horror');
+    expect(sanitizePrefs({ officeTheme: 'alien' }).officeTheme).toBe('alien');
+    expect(sanitizePrefs({ officeTheme: 'inexistente' }).officeTheme).toBe('original');
   });
   it('ciclo dia/noite: valida o modo e migra o interruptor antigo', () => {
     expect(DEFAULT_PREFS.daylight).toBe('auto');

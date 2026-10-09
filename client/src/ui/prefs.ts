@@ -1,12 +1,13 @@
 // Preferências da interface, persistidas em localStorage ('habblaud:prefs').
 // Puro: o armazenamento é injetado (testável em node).
 import { DEFAULT_SOUND_SETTINGS, sanitizeSoundSettings, type SoundSettings } from '../audio/scheduler';
-import type { DaylightMode, WorldOptions } from '../world/api';
+import type { DaylightMode, OfficeTheme, WorldOptions } from '../world/api';
 import { DEFAULT_WORLD_OPTIONS } from '../world/api';
 
 export const PREFS_KEY = 'habblaud:prefs';
 
 export interface UiPrefs {
+  officeTheme: OfficeTheme;
   showNames: boolean;
   bubbles: WorldOptions['bubbles'];
   liveliness: WorldOptions['liveliness'];
@@ -25,6 +26,7 @@ export interface UiPrefs {
 }
 
 export const DEFAULT_PREFS: UiPrefs = {
+  officeTheme: 'original',
   showNames: DEFAULT_WORLD_OPTIONS.showNames,
   bubbles: DEFAULT_WORLD_OPTIONS.bubbles,
   liveliness: DEFAULT_WORLD_OPTIONS.liveliness,
@@ -48,6 +50,7 @@ export function sanitizePrefs(raw: unknown): UiPrefs {
   const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const d = DEFAULT_PREFS;
   return {
+    officeTheme: oneOf(o.officeTheme, ['original', 'medieval', 'horror', 'alien'] as const, d.officeTheme),
     showNames: bool(o.showNames, d.showNames),
     bubbles: oneOf(o.bubbles, ['all', 'important', 'none'] as const, d.bubbles),
     liveliness: oneOf(o.liveliness, ['calm', 'normal', 'lively'] as const, d.liveliness),
@@ -83,7 +86,7 @@ export function savePrefs(storage: StorageLike | null, prefs: UiPrefs): void {
 
 /** Parte das preferências que o mundo (canvas) consome. */
 export function worldOptionsFrom(p: UiPrefs): Partial<WorldOptions> {
-  return { showNames: p.showNames, bubbles: p.bubbles, liveliness: p.liveliness, dayNight: p.daylight !== 'day', daylight: p.daylight };
+  return { officeTheme: p.officeTheme, showNames: p.showNames, bubbles: p.bubbles, liveliness: p.liveliness, dayNight: p.daylight !== 'day', daylight: p.daylight };
 }
 
 /** localStorage com proteção contra navegadores que lançam exceção ao acessá-lo. */

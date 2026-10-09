@@ -5,6 +5,8 @@
 export type Selection = { type: 'agent'; id: string } | { type: 'room'; id: string } | null;
 
 export interface WorldOptions {
+  /** Identidade visual do escritório; não altera dados nem comportamento dos agentes. */
+  officeTheme: OfficeTheme;
   /** Mostrar etiquetas com os nomes dos personagens. */
   showNames: boolean;
   /** Balões de atividade: todos, só importantes (precisa de você, selecionado, mudanças recentes) ou nenhum. */
@@ -21,6 +23,7 @@ export interface WorldOptions {
 
 /** Ciclo dia/noite: segue a hora local, ou fixa o dia ou a noite. */
 export type DaylightMode = 'auto' | 'day' | 'night';
+export type OfficeTheme = 'original' | 'medieval' | 'horror' | 'alien';
 
 /** Sons do ambiente que o mundo sugere (quem toca, e se toca, é a UI). */
 export type SoundCueKind = 'keys' | 'elevator' | 'pingpong' | 'table' | 'arcade';
@@ -124,6 +127,7 @@ export interface ViewInsets {
 }
 
 export const DEFAULT_WORLD_OPTIONS: WorldOptions = {
+  officeTheme: 'original',
   showNames: true,
   bubbles: 'important',
   liveliness: 'normal',
