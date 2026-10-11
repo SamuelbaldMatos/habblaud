@@ -1,0 +1,40 @@
+{
+  "description": "Consulta Claude de último recurso para decisões críticas; GPT máximo fica como contingência",
+  "models": [
+    {
+      "id": "maximo-model-1-cc-claude-opus-5-5",
+      "kind": "model",
+      "model": "cc/claude-opus-5-5",
+      "providerId": "cc",
+      "weight": 0
+    },
+    {
+      "id": "maximo-model-3-cc-claude-opus-5",
+      "kind": "model",
+      "model": "cc/claude-opus-5",
+      "providerId": "cc",
+      "weight": 0
+    },
+    {
+      "id": "maximo-model-4-agy-claude-opus-4-6-thinking",
+      "kind": "model",
+      "model": "agy/claude-opus-4-6-thinking",
+      "providerId": "agy",
+      "weight": 0
+    },
+    {
+      "id": "maximo-model-2-cx-gpt-6-astra-max",
+      "kind": "model",
+      "model": "cx/gpt-6-astra-max",
+      "providerId": "cx",
+      "weight": 0
+    },
+    {
+      "id": "maximo-model-5-cx-gpt-5-5-xhigh",
+      "kind": "model",
+      "model": "cx/gpt-5.5-xhigh",
+      "providerId": "cx",
+      "weight": 0
+    }
+  ]
+}

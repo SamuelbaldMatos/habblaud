@@ -147,6 +147,9 @@ npm run docker:up
 
 O script detecta as suas contas do Claude Code, monta só as pastas necessárias (em modo somente leitura), constrói
 a imagem e sobe o container — que reinicia sozinho junto com o Docker. Abra **http://localhost:4747**.
+No VS Code, as mesmas ações estão em **Terminal → Run Task**: `Habblaud: iniciar no Docker`, `Habblaud: parar Docker`
+e `Habblaud: logs Docker`. O servidor e as verificações aprovadas pelo orquestrador rodam no container, limitado a
+8 GB; a inicialização usa um processo Node curto no host para preparar as montagens do Docker.
 
 **Opção B — Node, sem Docker**
 

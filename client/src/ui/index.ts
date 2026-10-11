@@ -33,6 +33,7 @@ import { UpdateToaster } from './version';
 import { TopBar } from './topbar';
 import { UpdateBanner } from './update';
 import { FreeArea } from './viewport';
+import { OmniChatPanel } from './chat';
 import type { OfficeTheme } from '../world/api';
 
 /** Relógio dos tempos relativos ("há 5 s"). */
@@ -55,6 +56,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   const panels: Record<PanelName, boolean> = {
     sidebar: narrowMq?.matches ? false : prefs.sidebarOpen,
     feed: narrowMq?.matches ? false : prefs.feedOpen,
+    omni: true,
   };
 
   const live = h('div', { class: 'ui-sr', role: 'status', attrs: { 'aria-live': 'polite' } });
@@ -126,7 +128,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
       const next = open ?? !panels[name];
       if (panels[name] === next) return;
       panels[name] = next;
-      if (!ctx.isNarrow()) ctx.updatePrefs(name === 'sidebar' ? { sidebarOpen: next } : { feedOpen: next });
+      if (name !== 'omni' && !ctx.isNarrow()) ctx.updatePrefs(name === 'sidebar' ? { sidebarOpen: next } : { feedOpen: next });
       applyLayout();
       invalidate();
     },
@@ -174,18 +176,20 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   const tip = new HoverTip(ctx);
   const splash = new Splash(ctx);
   timelapse = new TimelapsePlayer(ctx);
+  const omni = new OmniChatPanel(ctx);
   const scrim = h('div', { class: 'ui-scrim', attrs: { 'aria-hidden': 'true' }, on: { click: () => ctx.togglePanel('sidebar', false) } });
 
   root.classList.add('ui-root');
   root.dataset.officeTheme = prefs.officeTheme;
-  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, tip.el, settings.el, history.el, help.el, live, splash.el);
+  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, omni.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, tip.el, settings.el, history.el, help.el, live, splash.el);
   if (new URLSearchParams(location.search).has("settings")) {
     requestAnimationFrame(() => settings.toggle(topbar.settingsBtn));
   }
-  area = new FreeArea(world, { root, topbar: topbar.el, sidebar: sidebar.el, drawer: drawer.el, feed: feed.el }, () => ({
+  area = new FreeArea(world, { root, topbar: topbar.el, sidebar: sidebar.el, drawer: drawer.el, feed: feed.el, workspace: omni.el }, () => ({
     sidebar: panels.sidebar,
     feed: panels.feed,
     drawer: selection !== null,
+    workspace: panels.omni,
     narrow: ctx.isNarrow(),
   }));
 
@@ -202,7 +206,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   void syncTheme();
   const themeTimer = setInterval(() => void syncTheme(), 2_000);
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, history, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster];
+  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, history, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster, omni];
 
   // ---------------------------------------------------------------- renderização agrupada por quadro
   let rafId = 0;
@@ -237,6 +241,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
     root.classList.toggle('has-sidebar', panels.sidebar);
     root.classList.toggle('has-feed', panels.feed);
     root.classList.toggle('has-drawer', selection !== null);
+    root.classList.toggle('has-workspace', panels.omni);
     root.classList.toggle('is-narrow', ctx.isNarrow());
     area.sync(opts);
   }

@@ -21,6 +21,15 @@ services:
       - "${HABBLAUD_BIND:-127.0.0.1}:${HABBLAUD_PORT:-4747}:4747"
     volumes:
       - habblaud-data:/data
+      - .:/workspace:rw
+      - habblaud-agent-deps:/workspace/node_modules
+      # Shared vault; per-runtime vector cache in /data avoids cross-OS SQLite writers.
+      - I:/Cerebro:/cerebro:ro
+      - I:/CarecaBrain/CarecaBrain:/vault:ro
+      - I:/CarecaBrain/CarecaBrain/conhecimento/sessoes-compartilhadas:/vault/conhecimento/sessoes-compartilhadas:rw
+      - I:/CarecaBrain/_ferramentas:/cerebro-tools:ro
+      - I:/Jarvis/dados:/jarvis-data:ro
+    mem_limit: 8g
     # Opções que podem vir do .env (ou do ambiente) para dentro do container.
     environment:
       HABBLAUD_ALLOWED_HOSTS: ${HABBLAUD_ALLOWED_HOSTS:-}
@@ -28,9 +37,23 @@ services:
       # O mesmo valor da porta publicada acima: o terminal somente leitura só liga com bind local.
       HABBLAUD_BIND: ${HABBLAUD_BIND:-127.0.0.1}
       HABBLAUD_TERMINAL: ${HABBLAUD_TERMINAL:-}
+      HABBLAUD_AGENT_WORKSPACE: /workspace
+      HABBLAUD_AGENT_TOKEN_BUDGET: ${HABBLAUD_AGENT_TOKEN_BUDGET:-120000}
+      HABBLAUD_CEREBRO_CLI: /cerebro/cerebro-cli.mjs
+      HABBLAUD_CEREBRO_PROJECT: OmniRoute + Habblaud
+      CEREBRO_VAULT: /vault
+      CEREBRO_INDICE: /cerebro-tools/capacidades.json
+      CEREBRO_ROTEADOR: /cerebro-tools/roteador.mjs
+      CEREBRO_VETORES_DB: /jarvis-data/jarvis.db
+      CEREBRO_VETORES_CACHE: /data/cerebro-vetores.sqlite
+      CEREBRO_OLLAMA_URL: http://host.docker.internal:11434
       # 0 desliga a verificação de versão nova (consulta às releases no GitHub a cada 6 h).
       HABBLAUD_UPDATE_CHECK: ${HABBLAUD_UPDATE_CHECK:-}
-    # Endurecimento: sistema de arquivos só leitura (exceto /data e /tmp), sem capabilities extras.
+      OMNIROUTE_URL: ${OMNIROUTE_URL:-http://host.docker.internal:20128}
+      OMNIROUTE_TOKEN: ${OMNIROUTE_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Endurecimento: sistema do container só leitura; /data, /tmp e workspace explicitamente montados.
     read_only: true
     tmpfs:
       - /tmp
@@ -43,3 +66,4 @@ services:
 
 volumes:
   habblaud-data:
+  habblaud-agent-deps:

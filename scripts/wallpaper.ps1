@@ -138,16 +138,30 @@ function Get-WallpaperHost {
   return [HabblaudWallpaper.Native]::FindWallpaperHost()
 }
 
-function Find-EdgeWindow([datetime]$StartedAfter) {
+function Get-EdgeWallpaperWindow([string]$ProfilePath, [string]$AppUrl, [datetime]$StartedAfter) {
+  $profileArg = "--user-data-dir=$ProfilePath"
+  $appArg = "--app=$AppUrl"
+  $ids = Get-CimInstance Win32_Process -Filter "Name = 'msedge.exe'" -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.CommandLine -and
+      $_.CommandLine.Contains($profileArg) -and
+      $_.CommandLine.Contains($appArg)
+    } |
+    Select-Object -ExpandProperty ProcessId
+  if (-not $ids) { return $null }
+  return Get-Process -Id $ids -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.MainWindowHandle -ne 0 -and
+      $_.StartTime -ge $StartedAfter.AddSeconds(-3)
+    } |
+    Sort-Object StartTime -Descending |
+    Select-Object -First 1
+}
+
+function Find-EdgeWindow([datetime]$StartedAfter, [string]$ProfilePath, [string]$AppUrl) {
   $deadline = (Get-Date).AddSeconds(30)
   do {
-    $window = Get-Process msedge -ErrorAction SilentlyContinue |
-      Where-Object {
-        $_.MainWindowHandle -ne 0 -and
-        $_.MainWindowTitle -like "*Habblaud*"
-      } |
-      Sort-Object StartTime -Descending |
-      Select-Object -First 1
+    $window = Get-EdgeWallpaperWindow $ProfilePath $AppUrl $StartedAfter
     if ($window) { return $window }
     Start-Sleep -Milliseconds 250
   } while ((Get-Date) -lt $deadline)
@@ -339,7 +353,7 @@ function Watch-Wallpaper {
       "--autoplay-policy=no-user-gesture-required"
     )
     Start-Process -FilePath $edgePath -ArgumentList $arguments | Out-Null
-    $edge = Find-EdgeWindow $startedAt
+    $edge = Find-EdgeWindow $startedAt $edgeData $wallpaperUrl
     $handle = [IntPtr]$edge.MainWindowHandle
     $wallpaperParent = Attach-Wallpaper $handle
   } catch {
@@ -364,9 +378,7 @@ function Watch-Wallpaper {
       Sync-TrayTheme $trayState.ThemeMenu
       $process = Get-Process -Id $edge.Id -ErrorAction SilentlyContinue
       if (-not $process) { break }
-      $liveWindow = Get-Process msedge -ErrorAction SilentlyContinue |
-        Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "*Habblaud*" } |
-        Select-Object -First 1
+      $liveWindow = Get-EdgeWallpaperWindow $edgeData $wallpaperUrl $startedAt
       if ($liveWindow -and [IntPtr]$liveWindow.MainWindowHandle -ne $handle) {
         $edge = $liveWindow
         $handle = [IntPtr]$liveWindow.MainWindowHandle

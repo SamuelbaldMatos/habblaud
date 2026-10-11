@@ -77,6 +77,11 @@ festa) ou 10 min. Push só avisa. O mesmo CI visto de novo em 2 min não repete 
 | `GET /api/timeline/:dia` | o arquivo do dia (`AAAA-MM-DD`) em JSONL (`application/x-ndjson`, gzip se aceito); 400 para dia inválido, 404 sem gravação |
 | `GET /api/health` | `{ok, version, demo, docker, terminal, permissions, updates:{state, latest, available}, sources, accounts:[{id, usageStatus}]}` |
 | `POST /api/demo` | `{enabled: boolean}` liga/desliga agentes simulados (misturados aos reais) |
+| `GET /api/omniroute/combos` | Combos OmniRoute disponíveis para o chat; só com acesso local |
+| `POST /api/omniroute/chat` | `{combo?, messages?, message?, system?}`; resposta SSE com eventos `text`, `model`, `error` e `[DONE]`; só com acesso local |
+| `POST /api/omniroute/run` | `{message, messages?}`; runtime `orquestrador` multiagente com SSE de texto, delegações, ferramentas e aprovações; só com acesso local |
+| `POST /api/omniroute/jobs/:id/approvals/:approvalId` | `{decision: "approve" \| "reject"}`; aprovação de uso único vinculada à tarefa |
+| `DELETE /api/omniroute/jobs/:id` | Cancela tarefa, chamadas OmniRoute e aprovações pendentes |
 | `GET /api/mod/summary?account=&session=` | `ModSummary` para o mod do Claude Code: `{version, agents, working, waiting:[{id, name, room, account, waitingFor, since, answerable}]}`, sem o demo e sem a sessão de quem pergunta (ver abaixo) |
 | `GET /api/updates` | `{version, ...UpdateStatus}`: versão em uso e o resultado da verificação de versão nova (ver abaixo) |
 | `POST /api/updates/check` | "Verificar agora": consulta o GitHub (no máximo uma vez a cada 30 s) e devolve `{version, ...UpdateStatus}` |
@@ -87,6 +92,22 @@ festa) ou 10 min. Push só avisa. O mesmo CI visto de novo em 2 min não repete 
 
 O snapshot (SSE e `GET /api/snapshot`) leva só as últimas 8 atividades de cada agente em `recent`; o histórico
 de até 200 (inclusive o começo de transcripts longos, lido em segundo plano) vem de `GET /api/agents/:id`.
+
+O chat do OmniRoute usa o combo selecionado (por padrão, `orquestrador`) e só é exposto quando o terminal
+somente leitura está habilitado por bind local. O proxy aceita apenas um upstream HTTP local
+(`127.0.0.1:20128` no Node; `host.docker.internal:20128` no Docker), e exige um token. Com o combo
+`orquestrador`, a rota `/run` permite consultas limitadas a especialistas e leitura restrita ao workspace.
+Substituições de arquivos e as verificações fixas `typecheck`, `test`, `build-client` e `build-server`
+esperam aprovação explícita no chat; aprovações expiram em 2 minutos e não são reutilizáveis. Os comandos
+rodam com `shell: false`, sem herdar as credenciais do servidor, com limite de 120 s e 256 KiB de saída.
+Cada chamada OmniRoute tem limite de 3 minutos.
+O cancelamento/fechamento do stream invalida aprovações pendentes. A integração de chat não grava no Cérebro.
+
+No Docker, o runtime de agente usa o workspace montado em `/workspace` e uma área de dependências Linux
+separada de `node_modules` do Windows. O serviço tem limite de 8 GB de RAM. O Docker desloca o processo do
+servidor e dos comandos para o container, mas essa memória ainda pertence ao host. No VS Code, use
+**Terminal → Run Task** e escolha `Habblaud: iniciar no Docker`, `Habblaud: parar Docker` ou
+`Habblaud: logs Docker`; o mesmo serviço também aparece na extensão Docker.
 
 Borda (`http/guard.ts`, vale para API, estáticos e Vite): `Host` precisa ser `localhost`/`*.localhost`, um IP
 ou um nome de `HABBLAUD_ALLOWED_HOSTS` (contra DNS rebinding) → senão 403; `POST` em `/api/*` exige
@@ -257,10 +278,16 @@ sugestão inválidos), 404 (pedido desconhecido, já entregue ou expirado), 405,
 | `HABBLAUD_ACCOUNTS` | — | JSON com metadados das contas vindos do host (Docker): `[{id, configDir, mountDir, short, name, email, organization, plan, color, cachedUsage}]`, casados por `id`, `mountDir` ou `configDir` |
 | `HABBLAUD_USAGE_DIR` | `~/.habblaud/usage` (Docker: `/usage`) | pasta do uso capturado pelo tap de statusline ou pelo mod do Claude Code, relida a cada 5 s |
 | `HABBLAUD_ALLOWED_HOSTS` | — | nomes extras aceitos no `Host`/`Origin` (vírgula); `localhost`, `*.localhost` e IPs sempre valem |
+| `OMNIROUTE_URL` | `http://127.0.0.1:20128` (Docker: `http://host.docker.internal:20128`) | endpoint local do OmniRoute; somente HTTP local é aceito |
+| `OMNIROUTE_TOKEN` | perfil `~/.claude/profiles/omniroute/settings.json` | token do OmniRoute; pode ser definido no ambiente ou no `.env` do Compose |
 
 No hook de permissão (ambiente do Claude Code; os argumentos `--port`/`--timeout` gravados pelo instalador têm
 preferência): `HABBLAUD_PORT` (porta do Habblaud, padrão `4747`), `HABBLAUD_PERMISSION_TIMEOUT` (segundos de espera
 pela resposta no Habblaud, padrão `300`, entre 5 e 1800) e `HABBLAUD_HOOK_DEBUG=1` (conta no stderr o que fez).
+
+Ao usar `npm run docker:up`, o instalador lê o token do perfil OmniRoute no host e o grava no
+`docker-compose.override.yml` local, ignorado pelo Git. Esse override também pode conter metadados de contas;
+não o compartilhe nem o adicione ao controle de versão.
 
 ## Uso do plano (5h e semanal)
 

@@ -40,6 +40,9 @@ export interface PanelGeometry {
   drawerTop: number;
   /** Gaveta como folha inferior (celular) em vez de coluna à direita. */
   drawerSheet: boolean;
+  /** Borda esquerda do painel workspace OmniRoute quando aberto. */
+  workspaceLeft: number;
+  workspaceOpen: boolean;
   /** Altura do feed aberto e recolhido, e a distância dele até a borda inferior. */
   feedOpenH: number;
   feedClosedH: number;
@@ -50,6 +53,7 @@ export interface PanelFlags {
   sidebar: boolean;
   feed: boolean;
   drawer: boolean;
+  workspace?: boolean;
   /** Tela estreita: a barra lateral vira gaveta sobreposta (com fundo escuro) e não conta como área coberta. */
   narrow: boolean;
 }
@@ -66,7 +70,12 @@ function shrinkPair(a: number, b: number, total: number): [number, number] {
 export function computeInsets(g: PanelGeometry, f: PanelFlags, gap = INSET_GAP): ViewInsets {
   const top = Math.max(0, g.topBottom) + gap;
   const left = f.sidebar && !f.narrow ? Math.max(0, g.sideRight) + gap : 0;
-  const right = f.drawer && !g.drawerSheet ? Math.max(0, g.vw - g.drawerLeft) + gap : 0;
+  let right = 0;
+  if (f.workspace && g.workspaceOpen && !f.narrow) {
+    right = Math.max(0, g.vw - g.workspaceLeft) + gap;
+  } else if (f.drawer && !g.drawerSheet) {
+    right = Math.max(0, g.vw - g.drawerLeft) + gap;
+  }
   const feedH = f.feed ? g.feedOpenH : g.feedClosedH;
   let bottom = feedH > 0 ? feedH + g.feedMargin + gap : 0;
   if (f.drawer && g.drawerSheet) bottom = Math.max(bottom, g.vh - g.drawerTop + gap);
@@ -89,6 +98,7 @@ export interface FreeAreaPanels {
   sidebar: HTMLElement;
   drawer: HTMLElement;
   feed: HTMLElement;
+  workspace?: HTMLElement;
 }
 
 /** `follow: 'option'` segue a opção "seguir selecionado" do momento; `true` = duplo clique (sempre segue). */
@@ -341,10 +351,12 @@ export class FreeArea {
 
   /** Posições de layout (offset*), que ignoram o transform das animações de abrir/fechar. */
   private measure(): PanelGeometry {
-    const { topbar, sidebar, drawer } = this.panels;
+    const { topbar, sidebar, drawer, workspace } = this.panels;
     const vw = innerWidth;
     const vh = innerHeight;
     const drawerSheet = drawer.offsetWidth >= vw - 40 && drawer.offsetTop > topbar.offsetHeight + 40;
+    const workspaceOpen = !!workspace && workspace.offsetWidth > 0 && !workspace.classList.contains('is-collapsed');
+    const workspaceLeft = workspaceOpen ? workspace.offsetLeft : vw;
     return {
       vw,
       vh,
@@ -353,6 +365,8 @@ export class FreeArea {
       drawerLeft: drawer.offsetLeft,
       drawerTop: drawer.offsetTop,
       drawerSheet,
+      workspaceLeft,
+      workspaceOpen,
       feedOpenH: this.probeFeedOpen.offsetHeight,
       feedClosedH: this.probeFeedClosed.offsetHeight,
       feedMargin: this.probeGap.offsetWidth,

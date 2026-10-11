@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Habblaud: iniciar no Docker",
+      "type": "npm",
+      "script": "docker:up",
+      "problemMatcher": []
+    },
+    {
+      "label": "Habblaud: parar Docker",
+      "type": "npm",
+      "script": "docker:down",
+      "problemMatcher": []
+    },
+    {
+      "label": "Habblaud: logs Docker",
+      "type": "shell",
+      "command": "docker",
+      "args": ["compose", "logs", "--tail=100", "--follow", "habblaud"],
+      "problemMatcher": []
+    }
+  ]
+}

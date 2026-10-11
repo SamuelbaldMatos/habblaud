@@ -5,7 +5,8 @@ import type { AccountsService } from '../accounts/service';
 import type { DayStatsService } from '../history/daystats';
 import type { Office } from '../model/office';
 import type { SessionHistory } from '../sources/history';
-import { isJsonContentType, isLoopbackHost } from './guard';
+import type { VscodeActivitySource } from '../sources/vscode';
+import { isJsonContentType, isLoopbackAddress, isLoopbackHost } from './guard';
 import { handleSessionsRoute } from './sessions';
 import type { Hub } from './sse';
 import { handleStatsRoute } from './stats';
@@ -41,6 +42,10 @@ export interface ApiDeps {
   };
   /** Tema visual global, compartilhado inclusive com o perfil do wallpaper. */
   theme?: { get(): OfficeTheme; set(theme: OfficeTheme): void };
+  /** Recebe somente metadados filtrados de hooks locais do VS Code. */
+  vscode?: VscodeActivitySource;
+  /** Rotas do chat e combos do OmniRoute (/api/omniroute/*). */
+  omniroute?: (req: IncomingMessage, res: ServerResponse, path: string) => boolean;
 }
 
 /** GET /api/agents/:id/terminal (ids nunca contêm '/'). */
@@ -215,6 +220,28 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           })
           .catch((err) => fail(res, err));
       } else methodNotAllowed(res, 'GET, POST');
+      return true;
+    }
+    if (path === '/api/vscode/activity') {
+      if (method !== 'POST') methodNotAllowed(res, 'POST');
+      else if (!deps.vscode) sendJson(res, 404, { error: 'integração VS Code indisponível' });
+      else if (!isLoopbackHost(req.headers.host) || (!deps.inDocker && !isLoopbackAddress(req.socket.remoteAddress))) {
+        req.resume();
+        sendJson(res, 403, { error: 'a integração VS Code só aceita conexões locais' });
+      } else {
+        readJson(req)
+          .then((body) => {
+            const result = deps.vscode?.record(body);
+            if (!result?.ok) throw new HttpError(400, result?.error ?? 'evento VS Code inválido');
+            sendJson(res, 202, { ok: true });
+          })
+          .catch((err) => fail(res, err));
+      }
+      return true;
+    }
+    if (path.startsWith('/api/omniroute')) {
+      if (deps.omniroute?.(req, res, path)) return true;
+      sendJson(res, 404, { error: 'integração OmniRoute indisponível' });
       return true;
     }
     if (path === '/api/mod/summary') {

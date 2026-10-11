@@ -39,6 +39,7 @@
   --gap: 10px;
   --side-w: 304px;
   --drawer-w: 380px;
+  --omni-w: 420px;
   --feed-h: 200px;
   --feed-head: 38px;
   --feed-max: 700px;
@@ -6955,5 +6956,295 @@ html.is-replay #world {
 @media (min-width: 601px) and (max-width: 760px) {
   .ui-topbar__right .ui-btn-group:first-child {
     display: none;
+  }
+}
+
+/* Compositor OmniRoute ao lado do feed; o histórico só ocupa espaço quando expandido. */
+.omni-workspace-panel {
+  position: fixed;
+  left: calc(var(--gap) * 2 + var(--feed-max));
+  right: var(--gap);
+  bottom: var(--gap);
+  min-width: 0;
+  height: var(--feed-head);
+  background: var(--ui-bg-solid);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition:
+    left 0.32s var(--ease),
+    right 0.32s var(--ease),
+    width 0.32s var(--ease),
+    height 0.3s var(--ease);
+  z-index: 16;
+}
+
+.omni-workspace-panel.is-expanded {
+  left: auto;
+  width: min(var(--omni-w), calc(100vw - var(--gap) * 2));
+  height: min(440px, calc(100vh - var(--top-h) - var(--feed-head) - var(--gap) * 3));
+}
+
+.ui-root.has-sidebar .omni-workspace-panel {
+  left: calc(var(--side-w) + var(--gap) * 2);
+  bottom: calc(var(--feed-head) + var(--gap) * 2);
+}
+
+.ui-root.has-drawer .omni-workspace-panel {
+  left: var(--gap);
+  bottom: calc(var(--feed-head) + var(--gap) * 2);
+}
+
+.ui-root.has-sidebar.has-drawer .omni-workspace-panel {
+  left: calc(var(--side-w) + var(--gap) * 2);
+}
+
+.ui-root.has-sidebar.has-feed .omni-workspace-panel,
+.ui-root.has-drawer.has-feed .omni-workspace-panel {
+  bottom: calc(var(--feed-h) + var(--gap) * 2);
+}
+
+.omni-workspace-panel.is-collapsed .omni-panel-header {
+  display: none;
+}
+
+.omni-panel-header {
+  flex: none;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--ui-line);
+}
+
+.omni-tabs-group,
+.omni-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.omni-tab-btn {
+  padding: 6px 8px;
+  color: var(--ui-muted);
+  border-bottom: 2px solid transparent;
+}
+
+.omni-tab-btn.is-active {
+  color: var(--ui-text);
+  border-color: var(--ui-accent);
+}
+
+.omni-messages-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.omni-chat-view,
+.omni-activity-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.omni-chat-footer {
+  flex: none;
+  min-width: 0;
+  padding: 4px 6px;
+  display: flex;
+}
+
+.omni-composer-row,
+.omni-input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.omni-composer-row {
+  height: 28px;
+  width: 100%;
+}
+
+.omni-agent-activity {
+  margin: 8px 0;
+  padding: 6px 9px;
+  border-left: 2px solid var(--ui-accent);
+  color: var(--ui-muted);
+  font-size: 0.9em;
+}
+
+.omni-approval-card,
+.omni-tool-result {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm);
+  background: var(--ui-bg-soft);
+  overflow-wrap: anywhere;
+}
+
+.omni-approval-card {
+  border-color: var(--ui-accent);
+}
+
+.omni-approval-card p {
+  margin: 6px 0;
+}
+
+.omni-approval-preview,
+.omni-tool-result {
+  margin-top: 8px;
+}
+
+.omni-approval-preview summary,
+.omni-tool-result summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.omni-approval-version {
+  margin-top: 10px;
+}
+
+.omni-approval-version pre,
+.omni-tool-result pre {
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 8px;
+  background: var(--ui-bg);
+}
+
+.omni-approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.omni-approval-actions button {
+  padding: 6px 10px;
+}
+
+.omni-approve-btn {
+  border-color: var(--ui-accent);
+}
+
+.omni-approval-error,
+.omni-tool-result.is-error {
+  color: #ff8b8b;
+}
+
+.omni-combo-select {
+  flex: 0 1 190px;
+  min-width: 105px;
+  max-width: 190px;
+  height: 28px;
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omni-input-wrapper {
+  flex: 1;
+}
+
+.omni-chat-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 26px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--ui-bg-soft);
+  color: var(--ui-text);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  resize: none;
+  font: inherit;
+}
+
+.omni-send-btn,
+.omni-stop-btn {
+  flex: none;
+  padding: 4px 7px;
+  white-space: nowrap;
+}
+
+.omni-split-btn {
+  flex: none;
+  width: 28px;
+  height: 28px;
+}
+
+@media (max-width: 1100px) {
+  .omni-workspace-panel {
+    left: var(--gap);
+    right: var(--gap);
+    bottom: calc(var(--feed-head) + var(--gap) * 2);
+  }
+
+  .ui-root.has-feed .omni-workspace-panel {
+    bottom: calc(var(--feed-h) + var(--gap) * 2);
+  }
+
+  .ui-root.has-sidebar .omni-workspace-panel {
+    left: var(--gap);
+  }
+
+  .ui-root.has-sidebar.has-drawer .omni-workspace-panel {
+    left: var(--gap);
+  }
+
+  .omni-workspace-panel.is-expanded {
+    left: var(--gap);
+    width: auto;
+    max-height: calc(100vh - var(--top-h) - var(--feed-head) - var(--gap) * 3);
+  }
+
+  .ui-root.has-feed .omni-workspace-panel.is-expanded {
+    max-height: calc(100vh - var(--top-h) - var(--feed-h) - var(--gap) * 3);
+  }
+}
+
+@media (max-width: 520px) {
+  .omni-combo-select {
+    flex-basis: 110px;
+    min-width: 82px;
+    max-width: 110px;
+    font-size: 11px;
+  }
+
+  .omni-send-btn span + span {
+    display: none;
+  }
+
+  .omni-send-btn {
+    width: 28px;
+    padding: 4px;
+  }
+
+  .omni-send-btn span {
+    font-size: 13px;
+  }
+
+  .omni-stop-btn {
+    padding: 4px 5px;
+    font-size: 11px;
   }
 }

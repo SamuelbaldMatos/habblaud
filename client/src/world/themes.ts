@@ -74,7 +74,18 @@ export const THEME_VISUAL_PROFILES: Readonly<Record<OfficeTheme, ThemeVisualProf
 export function visualForCharacter(theme: OfficeTheme, ch: Character): ThemeActivityVisual | null {
   if (theme === 'original') return null;
   const profile = THEME_VISUAL_PROFILES[theme];
-  if (ch.pose === 'walk' || ch.pose === 'run' || ch.pose === 'sleep' || ch.pose === 'wait') return null;
-  if (ch.mode === 'work') return profile.work[ch.info.activity?.kind ?? 'other'] ?? profile.defaultWork;
+  if (ch.pose === 'sleep' || ch.pose === 'wait') return null;
+  if (ch.mode === 'work') {
+    const visual = profile.work[ch.info.activity?.kind ?? 'other'] ?? profile.defaultWork;
+    // Durante o deslocamento preserva a animação original do corpo, mas o familiar/efeito
+    // temático continua acompanhando o funcionário em vez de desaparecer entre as mesas.
+    if (ch.pose === 'walk' || ch.pose === 'run') {
+      return visual.effect || visual.companion
+        ? { effect: visual.effect, companion: visual.companion }
+        : null;
+    }
+    return visual;
+  }
+  if (ch.pose === 'walk' || ch.pose === 'run') return null;
   return profile.social[ch.pose] ?? null;
 }

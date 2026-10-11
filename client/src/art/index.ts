@@ -20,7 +20,7 @@ import {
   type WallStyle,
 } from './api';
 import { appearanceFromSeed as appearanceFromSeedPure, appearanceKey } from './character/appearance';
-import { CHAR_H, CHAR_W, POSE_DURATION, POSE_FRAMES, isSeated, renderCharacter } from './character/render';
+import { CHAR_H, CHAR_W, POSE_DURATION, POSE_FRAMES, isSeated } from './character/render';
 import { renderThemedCharacter } from './character/theme-costume';
 import { shade } from './core/color';
 import { PixelBuf } from './core/pixbuf';
@@ -43,57 +43,25 @@ export function setOfficeTheme(theme: OfficeTheme): void {
   officeTheme = theme;
 }
 
-function costumeAppearance(a: Appearance): Appearance {
-  if (officeTheme === 'original') return a;
-  const n = hash32(appearanceKey(a));
-  if (officeTheme === 'medieval') {
-    const cloth = ['#6f2638', '#294f35', '#243f68', '#6b4825'][n % 4];
-    return { ...a, top: cloth, topAccent: '#d6ad4d', bottom: '#30251f', shoes: '#241b18', topStyle: 'jacket' };
-  }
-  if (officeTheme === 'horror') {
-    const cloth = ['#17171a', '#242126', '#30252a'][n % 3];
-    return { ...a, top: cloth, topAccent: n % 2 ? '#6f101c' : '#77716b', bottom: '#121216', shoes: '#09090b', topStyle: 'jacket' };
-  }
-  const suit = ['#d4e2e4', '#687d91', '#433866'][n % 3];
-  return { ...a, top: suit, topAccent: n % 2 ? '#42f5d4' : '#bd77ff', bottom: '#263447', shoes: '#121d2b', topStyle: 'jacket' };
-}
-
-function decorateCostume(s: BufSprite, seed: number): BufSprite {
-  if (officeTheme === 'original') return s;
-  const b = s.buf;
-  const n = hash32(String(seed));
-  if (officeTheme === 'medieval') {
-    const gold = '#e5bd57';
-    // Broche e cinto de guilda; alguns usam coroa, outros capuz/pena.
-    b.set(11, 20, gold);
-    b.set(12, 20, gold);
-    for (let x = 8; x <= 15; x++) b.set(x, 24, x === 11 || x === 12 ? gold : '#3c281c');
-    if (n % 3 === 0) {
-      for (let x = 8; x <= 15; x++) b.set(x, 5, gold);
-      b.set(8, 3, gold); b.set(11, 2, gold); b.set(15, 3, gold);
-    } else if (n % 3 === 1) {
-      b.set(17, 7, '#d7c07b'); b.set(18, 5, '#d7c07b'); b.set(19, 3, '#efe0a5');
-    }
-  } else if (officeTheme === 'horror') {
-    // Uniforme vitoriano gasto, costuras e manchas escuras — horror sério, sem Halloween cômico.
-    for (let y = 19; y <= 26; y += 3) b.set(8 + ((y + n) % 7), y, '#08080a');
-    b.set(11, 20, '#8a1422'); b.set(12, 21, '#4c0b12');
-    if (n % 4 === 0) {
-      b.set(7, 10, '#d8d2c8'); b.set(8, 9, '#d8d2c8');
-      b.set(15, 10, '#d8d2c8'); b.set(14, 9, '#d8d2c8');
-    }
-  } else {
-    // Macacão espacial, visor emissivo e antena/capacete variável.
-    const glow = n % 2 ? '#42f5d4' : '#bd77ff';
-    for (let x = 8; x <= 15; x++) b.set(x, 12, glow);
-    b.set(11, 20, glow); b.set(12, 20, glow);
-    b.set(12, 4, '#8799aa'); b.set(12, 2, glow);
-    if (n % 3 === 0) { b.set(6, 8, '#8799aa'); b.set(17, 8, '#8799aa'); }
-  }
-  return s;
-}
-
 const NATURAL_FURNITURE = new Set<FurnitureKind>(['plant_small', 'plant_tall']);
+const FUNCTION_COLOR_FURNITURE = new Set<FurnitureKind>([
+  'coffee_machine', 'light_switch', 'toilet_stall', 'elevator', 'vending_machine',
+]);
+const SURFACE_FURNITURE = new Set<FurnitureKind>([
+  'desk', 'desk_back', 'meeting_table', 'counter', 'counter_sink', 'coffee_machine',
+  'microwave', 'cafe_table', 'coffee_table', 'pingpong_table', 'reception_desk', 'sink',
+]);
+const STORAGE_FURNITURE = new Set<FurnitureKind>([
+  'bookshelf', 'binder_shelf', 'filing_cabinet', 'shelf_wall', 'fridge', 'vending_machine',
+]);
+
+function insideDynamicRect(s: BufSprite, x: number, y: number): boolean {
+  if (!s.rects) return false;
+  for (const r of Object.values(s.rects)) {
+    if (r && x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h) return true;
+  }
+  return false;
+}
 
 /** Recolore o sprite existente sem mudar âncora, footprint, estados ou regiões interativas. */
 function themeFurniture(s: BufSprite, kind: FurnitureKind): void {
@@ -109,7 +77,84 @@ function themeFurniture(s: BufSprite, kind: FurnitureKind): void {
     if (d[i + 3] < 16) continue;
     const lum = (d[i] * 0.2126 + d[i + 1] * 0.7152 + d[i + 2] * 0.0722) / 255;
     const p = ramp[Math.min(3, Math.floor(lum * 4))];
-    d[i] = p[0]; d[i + 1] = p[1]; d[i + 2] = p[2];
+    const max = Math.max(d[i], d[i + 1], d[i + 2]);
+    const min = Math.min(d[i], d[i + 1], d[i + 2]);
+    // Luzes de estado continuam reconhecíveis; o restante recebe material temático mantendo textura.
+    const mix = FUNCTION_COLOR_FURNITURE.has(kind) && max - min > 48 ? 0.38 : 0.82;
+    d[i] = Math.round(d[i] * (1 - mix) + p[0] * mix);
+    d[i + 1] = Math.round(d[i + 1] * (1 - mix) + p[1] * mix);
+    d[i + 2] = Math.round(d[i + 2] * (1 - mix) + p[2] * mix);
+  }
+}
+
+/** Detalhes por função, desenhados dentro do canvas existente e fora das regiões dinâmicas. */
+function decorateThemedFurniture(s: BufSprite, kind: FurnitureKind, seed: number, front: boolean): void {
+  if (officeTheme === 'original' || NATURAL_FURNITURE.has(kind)) return;
+  const b = s.buf;
+  const w = b.w;
+  const h = b.h;
+  const put = (x: number, y: number, color: string) => {
+    x = Math.round(x);
+    y = Math.round(y);
+    if (x < 0 || y < 0 || x >= w || y >= h || b.alpha(x, y) < 32 || insideDynamicRect(s, x, y)) return;
+    b.set(x, y, color);
+  };
+  const row = (x0: number, x1: number, y: number, color: string, step = 1) => {
+    for (let x = x0; x <= x1; x += step) put(x, y, color);
+  };
+  const yBase = Math.max(1, h - (front ? 2 : 4));
+  const salt = hash32(`${kind}:${seed}:${front ? 1 : 0}`);
+
+  if (officeTheme === 'medieval') {
+    const gold = '#d6ad4d';
+    const iron = '#71664f';
+    if (SURFACE_FURNITURE.has(kind)) row(3, w - 4, yBase, '#7e4d28', 2);
+    if (STORAGE_FURNITURE.has(kind)) {
+      row(2, w - 3, Math.max(2, Math.floor(h * 0.35)), iron, 3);
+      put(2, Math.floor(h * 0.6), gold); put(w - 3, Math.floor(h * 0.6), gold);
+    }
+    // Aros de bronze em telas, jogos e aparelhos: o conteúdo/estado no rect fica intocado.
+    for (const r of Object.values(s.rects ?? {})) {
+      if (!r) continue;
+      row(r.x, r.x + r.w - 1, r.y - 1, gold, 3);
+      put(r.x - 1, r.y, iron); put(r.x + r.w, r.y, iron);
+    }
+    if (!SURFACE_FURNITURE.has(kind) && !STORAGE_FURNITURE.has(kind)) row(3, w - 4, yBase, gold, 7);
+  } else if (officeTheme === 'horror') {
+    const seam = '#171419';
+    const wear = '#62575a';
+    // Desgaste assimétrico e rachaduras secas; nenhum sangue decorativo ou símbolo de Halloween.
+    const x = 2 + (salt % Math.max(1, w - 5));
+    const y = Math.max(2, Math.floor(h * 0.42));
+    put(x, y, wear); put(x + 1, y + 1, seam); put(x, y + 2, seam);
+    if (SURFACE_FURNITURE.has(kind)) row(3, w - 4, yBase, seam, 4);
+    if (STORAGE_FURNITURE.has(kind)) {
+      put(Math.floor(w / 2), y, seam);
+      put(Math.floor(w / 2) + 1, y + 1, wear);
+      put(Math.floor(w / 2), y + 2, seam);
+    }
+    for (const r of Object.values(s.rects ?? {})) {
+      if (!r) continue;
+      put(r.x - 1, r.y, '#77716b');
+      put(r.x + r.w, r.y + r.h - 1, '#65101b');
+    }
+  } else {
+    const cyan = '#42f5d4';
+    const violet = '#bd77ff';
+    const panel = '#173f58';
+    // Juntas de painel e nós emissivos seguem a massa do móvel, sem alterar sua colisão.
+    row(3, w - 4, yBase, panel, 2);
+    for (let x = 4 + (salt % 3); x < w - 3; x += 6) put(x, yBase, cyan);
+    if (STORAGE_FURNITURE.has(kind)) {
+      row(3, w - 4, Math.max(2, Math.floor(h * 0.45)), panel, 2);
+      put(w - 4, Math.floor(h * 0.45), violet);
+    }
+    for (const r of Object.values(s.rects ?? {})) {
+      if (!r) continue;
+      row(r.x, r.x + r.w - 1, r.y - 1, cyan, 2);
+      put(r.x - 1, r.y + r.h - 1, violet);
+      put(r.x + r.w, r.y, violet);
+    }
   }
 }
 
@@ -228,11 +273,8 @@ export function furnitureSprites(kind: FurnitureKind, variant?: string, state?: 
     const f = renderFurniture(kind, n.variant, n.state, n.vseed);
     themeFurniture(f.base, kind);
     if (f.front) themeFurniture(f.front, kind);
-    const accent = officeTheme === 'medieval' ? '#d6ad4d' : officeTheme === 'horror' ? '#65101b' : officeTheme === 'alien' ? '#42f5d4' : null;
-    if (accent && f.base.buf.w > 8 && f.base.buf.h > 5) {
-      const y = f.base.buf.h - 4;
-      for (let x = 3; x < f.base.buf.w - 3; x += officeTheme === 'alien' ? 3 : 7) f.base.buf.set(x, y, accent);
-    }
+    decorateThemedFurniture(f.base, kind, n.vseed, false);
+    if (f.front) decorateThemedFurniture(f.front, kind, n.vseed, true);
     return { base: toSprite(f.base), front: f.front ? toSprite(f.front) : undefined };
   });
 }

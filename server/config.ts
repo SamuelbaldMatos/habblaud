@@ -20,6 +20,8 @@ export interface ServerConfig {
   home: string;
   /** Config dirs do Claude Code observados (um por conta). */
   claudeDirs: string[];
+  /** Diretório de sessões Codex (`CODEX_HOME/sessions`; só a primeira linha de metadados é lida). */
+  codexSessionsDir: string;
   /** Onde o Habblaud guarda o próprio estado (nomes persistidos). */
   dataDir: string;
   /**
@@ -139,6 +141,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] 
     inDocker,
     home,
     claudeDirs: discoverClaudeDirs(env, home),
+    codexSessionsDir: resolve(env.CODEX_HOME?.trim() || join(home, '.codex'), 'sessions'),
     dataDir: resolve(env.HABBLAUD_DATA_DIR?.trim() || (inDocker ? '/data' : join(home, '.habblaud'))),
     usageDir: resolve(env.HABBLAUD_USAGE_DIR?.trim() || join(home, '.habblaud', 'usage')),
     allowedHosts: parseAllowedHosts(env.HABBLAUD_ALLOWED_HOSTS),

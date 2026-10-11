@@ -1,0 +1,26 @@
+{
+  "description": "Gerente permanente: GPT-6 Astra/Sol com GPT-5.5 de reserva; Claude fica fora do comando diário",
+  "models": [
+    {
+      "id": "orquestrador-model-3-cx-gpt-6-astra-high",
+      "kind": "model",
+      "model": "cx/gpt-6-astra-high",
+      "providerId": "cx",
+      "weight": 0
+    },
+    {
+      "id": "orquestrador-model-4-cx-gpt-6-sol-high",
+      "kind": "model",
+      "model": "cx/gpt-6-sol-high",
+      "providerId": "cx",
+      "weight": 0
+    },
+    {
+      "id": "orquestrador-model-5-cx-gpt-5-5-xhigh",
+      "kind": "model",
+      "model": "cx/gpt-5.5-xhigh",
+      "providerId": "cx",
+      "weight": 0
+    }
+  ]
+}

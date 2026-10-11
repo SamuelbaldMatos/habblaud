@@ -234,6 +234,30 @@ export class Sim {
     return rs;
   }
 
+  /**
+   * Regera apenas a aparencia deterministica das salas depois de uma troca de tema.
+   * Os ids/slots dos lugares continuam iguais, portanto reservas, personagens e planos
+   * permanecem vivos; `relayout` apenas atualiza piso, paredes, tapetes e variantes visuais.
+   */
+  refreshRoomThemes(): void {
+    for (const room of this.rooms.values()) {
+      if (!room.present) continue;
+      let theme = FALLBACK_THEME;
+      try {
+        theme = this.art.roomTheme(room.seed) ?? FALLBACK_THEME;
+      } catch {
+        theme = FALLBACK_THEME;
+      }
+      room.theme = theme;
+      room.layout = layoutProjectRoom(
+        { id: room.id, slot: room.slot, seed: room.seed },
+        theme,
+      );
+      room.version++;
+    }
+    this.relayout();
+  }
+
   /** Menor vaga sem sala (contando as que ainda estão desmontando). */
   private freeSlot(): number {
     const used = new Set<number>();

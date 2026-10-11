@@ -1,7 +1,7 @@
 // Registro de sessões ABERTAS do Claude Code: <configDir>/sessions/<pid>.json.
 // O arquivo existe enquanto o processo vive. Fora do Docker também confirmamos o PID
 // (um arquivo pode sobrar se o processo morrer sem limpar); no Docker os PIDs são do host.
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentStatus } from '../../shared/types';
 import { describeWaitingFor } from '../../shared/activity';
@@ -110,9 +110,8 @@ export interface RegistryPoll {
 }
 
 interface Cached {
-  mtimeMs: number;
-  size: number;
-  entry: RegistryEntry | undefined;
+  raw: string;
+  entry: RegistryEntry;
 }
 
 export class RegistryReader {
@@ -143,26 +142,22 @@ export class RegistryReader {
       if (!name.endsWith('.json')) continue;
       const file = join(this.sessionsDir, name);
       seen.add(file);
-      let st;
+      let raw: string;
       try {
-        st = statSync(file);
+        raw = readFileSync(file, 'utf8');
       } catch {
         continue;
       }
       let cached = this.cache.get(file);
-      if (!cached || cached.mtimeMs !== st.mtimeMs || cached.size !== st.size) {
-        let entry: RegistryEntry | undefined;
-        try {
-          entry = parseRegistryEntry(readFileSync(file, 'utf8'));
-        } catch {
-          entry = undefined;
+      if (!cached || cached.raw !== raw) {
+        const entry = parseRegistryEntry(raw);
+        if (entry) {
+          cached = { raw, entry };
+          this.cache.set(file, cached);
         }
-        if (entry) cached = { mtimeMs: st.mtimeMs, size: st.size, entry };
         // JSON inválido (arquivo sendo gravado): mantém a última versão boa e tenta de novo no próximo ciclo.
-        else cached = cached ? { ...cached } : { mtimeMs: 0, size: -1, entry: undefined };
-        this.cache.set(file, cached);
       }
-      const e = cached.entry;
+      const e = cached?.entry;
       if (!e) continue;
       if (this.opts.checkPid && !this.isAlive(e.pid)) continue;
       entries.push(e);

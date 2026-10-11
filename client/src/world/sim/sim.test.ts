@@ -89,6 +89,43 @@ function newSim(): Sim {
 }
 
 describe('simulação do escritório', () => {
+  it('troca o tema visual das salas sem recriar funcionários nem perder lugares', () => {
+    let activeTheme = theme;
+    const dynamicArt = {
+      ...art,
+      roomTheme: () => activeTheme,
+    } as unknown as ArtModule;
+    const sim = new Sim(dynamicArt, () => ({ ...DEFAULT_WORLD_OPTIONS, liveliness: 'calm' }));
+    const clock = { now: T0 };
+    sim.applySnapshot(snap([room('/a', 0)], [agent('ana', '/a', 'working')]), clock.now);
+    run(sim, clock, 0.5);
+
+    const ana = sim.chars.get('ana')!;
+    const state = sim.rooms.get('/a')!;
+    const homeSpot = ana.homeSpot;
+    const phase = state.phase;
+    const layoutVersion = sim.layoutVersion;
+    activeTheme = {
+      carpet: '#240b10',
+      carpet2: '#110509',
+      wall: { base: '#19151a', trim: '#5d1c27', pattern: 'wood_panel' },
+      accent: '#8b1729',
+      deskVariant: 'dark',
+      chairVariant: 'black',
+    };
+
+    sim.refreshRoomThemes();
+
+    expect(sim.chars.get('ana')).toBe(ana);
+    expect(sim.rooms.get('/a')).toBe(state);
+    expect(state.phase).toBe(phase);
+    expect(state.theme).toBe(activeTheme);
+    expect(state.layout.floorTint).toBe(activeTheme.carpet);
+    expect(ana.homeSpot).toBe(homeSpot);
+    expect(homeSpot && sim.spots.ownerOf(homeSpot)).toBe('ana');
+    expect(sim.layoutVersion).toBeGreaterThan(layoutVersion);
+  });
+
   it('carga inicial: quem trabalha já está sentado digitando, sala acesa', () => {
     const sim = newSim();
     const clock = { now: T0 };

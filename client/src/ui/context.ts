@@ -9,7 +9,7 @@ export interface UiComponent {
   render(): void;
 }
 
-export type PanelName = 'sidebar' | 'feed';
+export type PanelName = 'sidebar' | 'feed' | 'omni';
 
 export type HelpSection = 'usage';
 

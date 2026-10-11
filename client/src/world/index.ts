@@ -347,7 +347,9 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
       options = { ...options, ...o };
       if (themeChanged) {
         artModule.setOfficeTheme(options.officeTheme);
-        // Tema é somente visual: mantém a simulação e todos os funcionários já carregados.
+        // Regera as superfícies/variantes com o novo tema, conservando salas, reservas,
+        // funcionários, posições e a máquina de estados da simulação.
+        sim.refreshRoomThemes();
         renderer = new Renderer(canvas, art, sim, camera);
         if (assets) renderer.setAssets(assets);
         if (playback) renderer.clock = () => playback!.clock();

@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModSummary, OfficeSnapshot, PermissionRequestInfo, UpdateStatus } from '../../shared/types';
 import { AccountsService } from '../accounts/service';
 import { setQuiet } from '../log';
@@ -10,9 +10,12 @@ import { NameStore } from '../model/names';
 import { Office, type OfficeDeps } from '../model/office';
 import { tempDir } from '../test/fixtures';
 import { createApiHandler, type ApiDeps } from './app';
-import { createRequestGuard, hostAllowed, hostnameOf, isLoopbackHost, originAllowed, parseAllowedHosts } from './guard';
+import { createRequestGuard, hostAllowed, hostnameOf, isLoopbackAddress, isLoopbackHost, originAllowed, parseAllowedHosts } from './guard';
 import { Hub } from './sse';
 import { createStaticHandler, IMMUTABLE, REVALIDATE } from './static';
+import { opaqueSessionId } from '../sources/privacy';
+import { VscodeActivitySource } from '../sources/vscode';
+import { createOmnirouteHandler } from './omniroute';
 
 setQuiet(true);
 
@@ -22,7 +25,11 @@ interface Env {
   close: () => Promise<void>;
 }
 
-async function start(extra: Partial<ApiDeps> = {}, officeExtra: Partial<OfficeDeps> = {}): Promise<Env & { cleanup: () => void }> {
+async function start(
+  extra: Partial<ApiDeps> = {},
+  officeExtra: Partial<OfficeDeps> = {},
+  apiForOffice?: (office: Office) => Partial<ApiDeps>,
+): Promise<Env & { cleanup: () => void }> {
   const tmp = tempDir();
   const dir = join(tmp.dir, '.claude');
   mkdirSync(join(dir, 'sessions'), { recursive: true });
@@ -47,7 +54,16 @@ async function start(extra: Partial<ApiDeps> = {}, officeExtra: Partial<OfficeDe
   late.office = office;
   const hub = new Hub(office, { throttleMs: 10 });
   hub.start();
-  const api = createApiHandler({ office, hub, accounts, sources: () => [], version: '9.9.9', inDocker: false, ...extra });
+  const api = createApiHandler({
+    office,
+    hub,
+    accounts,
+    sources: () => [],
+    version: '9.9.9',
+    inDocker: false,
+    ...extra,
+    ...(apiForOffice ? apiForOffice(office) : {}),
+  });
   const serveStatic = createStaticHandler(dist);
   const guard = createRequestGuard({ allowedHosts: new Set(['habblaud.lan']) });
   const server = http.createServer((req, res) => {
@@ -111,6 +127,52 @@ describe('API HTTP', () => {
     expect(snap.agents.map((a) => a.id)).toEqual(['.claude:1']);
     expect(snap.accounts[0]).toMatchObject({ id: '.claude', sessions: 1 });
     expect(snap.meta.version).toBe('9.9.9');
+  });
+
+  it('POST /api/vscode/activity accepts metadata only and requires a loopback Host', async () => {
+    let bridge: VscodeActivitySource | undefined;
+    const hooked = await start({}, {}, (office) => {
+      bridge = new VscodeActivitySource({ office, path: 'C:\\Users\\test\\.copilot\\hooks' });
+      return { vscode: bridge };
+    });
+    try {
+      const body = {
+        event: 'UserPromptSubmit',
+        sessionId: 'privateSessionMarker123',
+        cwd: process.cwd(),
+        prompt: 'private prompt marker',
+        response: 'private response marker',
+        tool_input: { secret: 'private tool argument marker' },
+      };
+      const response = await fetch(`${hooked.base}/api/vscode/activity`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(202);
+      const id = `vscode:${opaqueSessionId('vscode', body.sessionId)}`;
+      const details = JSON.stringify(hooked.office.detail(id));
+      expect(details).toContain('Nova mensagem para o agente');
+      expect(details).not.toContain(body.sessionId);
+      expect(details).not.toContain(body.cwd);
+      expect(details).not.toContain('private prompt marker');
+      expect(details).not.toContain('private response marker');
+      expect(details).not.toContain('private tool argument marker');
+      const snapshot = JSON.stringify(await snapshotOf(hooked.base));
+      expect(snapshot).not.toContain(body.sessionId);
+      expect(snapshot).not.toContain(body.cwd);
+
+      const nonLoopbackHost = await raw(hooked.base, '/api/vscode/activity', {
+        method: 'POST',
+        headers: { Host: 'habblaud.lan', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(nonLoopbackHost.status).toBe(403);
+    } finally {
+      bridge?.stop();
+      await hooked.close();
+      hooked.cleanup();
+    }
   });
 
   it('GET /api/stream envia retry, snapshot e feed; depois as mudanças', async () => {
@@ -252,6 +314,144 @@ describe('API HTTP', () => {
     // Tentativa de sair da pasta cai no index.html, nunca em arquivos de fora.
     const escape = await fetch(`${env.base}/..%2F..%2Fetc%2Fpasswd`);
     expect(await escape.text()).toContain('<title>Habblaud</title>');
+  });
+});
+
+describe('API HTTP do OmniRoute', () => {
+  let env: Awaited<ReturnType<typeof start>>;
+
+  beforeEach(async () => {
+    vi.stubEnv('OMNIROUTE_TOKEN', 'token-de-teste');
+    vi.stubEnv('OMNIROUTE_URL', 'http://127.0.0.1:20128');
+    env = await start({ omniroute: createOmnirouteHandler({ inDocker: false, rootDir: process.cwd() }) });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    await env.close();
+    env.cleanup();
+  });
+
+  it('expõe os combos e rejeita payload inválido sem chamar o upstream', async () => {
+    const combos = await fetch(`${env.base}/api/omniroute/combos`);
+    expect(combos.status).toBe(200);
+    const comboBody = (await combos.json()) as { combos: string[] };
+    expect(comboBody.combos).toContain('orquestrador');
+
+    const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(''));
+    const response = await raw(env.base, '/api/omniroute/chat', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ combo: 'inexistente', message: 'Olá' }),
+    });
+    expect(response.status).toBe(400);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it('restringe a rota de chat e o endpoint upstream à rede local', async () => {
+    const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(''));
+    const nonLocalHost = await raw(env.base, '/api/omniroute/chat', {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, Host: 'habblaud.lan' },
+      body: JSON.stringify({ message: 'Olá' }),
+    });
+    expect(nonLocalHost.status).toBe(403);
+
+    vi.stubEnv('OMNIROUTE_URL', 'https://example.com');
+    const externalEndpoint = await raw(env.base, '/api/omniroute/chat', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ message: 'Olá' }),
+    });
+    expect(externalEndpoint.status).toBe(503);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it('repassa eventos SSE concluídos do OmniRoute', async () => {
+    const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        [
+          'event: message_start',
+          'data: {"type":"message_start","message":{"model":"modelo-teste"}}',
+          '',
+          'event: content_block_delta',
+          'data: {"type":"content_block_delta","delta":{"text":"Olá"}}',
+          '',
+          'event: message_stop',
+          'data: {"type":"message_stop"}',
+          '',
+          '',
+        ].join('\n'),
+      ),
+    );
+    const response = await raw(env.base, '/api/omniroute/chat', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ combo: 'codigo', message: 'Diga olá' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toContain('"model":"modelo-teste"');
+    expect(response.body).toContain('"text":"Olá"');
+    expect(response.body).toContain('data: [DONE]');
+    expect(upstream).toHaveBeenCalledOnce();
+    const sent = JSON.parse(String(upstream.mock.calls[0][1]?.body));
+    expect(sent).toMatchObject({ model: 'codigo', stream: true, messages: [{ role: 'user', content: 'Diga olá' }] });
+  });
+
+  it('emite erro SSE quando o upstream encerra sem evento de conclusão', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"text":"parcial"}}\n\n'),
+    );
+    const response = await raw(env.base, '/api/omniroute/chat', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ message: 'Diga algo' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toContain('"text":"parcial"');
+    expect(response.body).toContain('Resposta do OmniRoute foi interrompida antes de concluir.');
+    expect(response.body).toContain('data: [DONE]');
+  });
+
+  it('executa o gerente multiagente em uma rota SSE com ferramentas limitadas', async () => {
+    const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ model: 'gpt-teste', content: [{ type: 'text', text: 'Vou analisar a tarefa.' }] }), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const response = await raw(env.base, '/api/omniroute/run', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ message: 'Analise a tarefa.' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toContain('"type":"job"');
+    expect(response.body).toContain('"text":"Vou analisar a tarefa."');
+    expect(response.body).toContain('"type":"done"');
+    expect(upstream).toHaveBeenCalledOnce();
+    const sent = JSON.parse(String(upstream.mock.calls[0][1]?.body));
+    expect(sent).toMatchObject({ model: 'orquestrador', stream: false });
+    expect(sent.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      'consult_specialist',
+      'read_file',
+      'propose_file_write',
+      'request_check',
+    ]);
+  });
+
+  it('nega execução multiagente se a conexão não for local', async () => {
+    const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(''));
+    const response = await raw(env.base, '/api/omniroute/run', {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, Host: 'habblaud.lan' },
+      body: JSON.stringify({ message: 'Analise a tarefa.' }),
+    });
+    expect(response.status).toBe(403);
+    expect(upstream).not.toHaveBeenCalled();
   });
 });
 

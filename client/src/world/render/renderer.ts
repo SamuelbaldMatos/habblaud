@@ -878,20 +878,29 @@ export class Renderer {
     ctx.save();
     ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
     if (this.activeTheme === 'medieval') {
-      ctx.fillStyle = '#3b2415'; ctx.fillRect(r.x, r.y, r.w, r.h);
+      // Vidro de adivinhação: preserva o programa/jogo original sob uma pátina de âmbar.
+      ctx.fillStyle = 'rgba(63,36,17,0.28)'; ctx.fillRect(r.x, r.y, r.w, r.h);
+      if (r.w > 2 && r.h > 2) {
+        ctx.strokeStyle = 'rgba(239,199,93,0.78)';
+        ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+      }
       ctx.fillStyle = '#efc75d';
-      for (let i = 0; i < 4; i++) ctx.fillRect(r.x + 2 + ((seed + i * 5) % Math.max(2, r.w - 3)), r.y + 2 + i * 3, 1, 3);
-      ctx.strokeStyle = '#9d682b'; ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+      const runeX = r.x + ((seed + Math.floor(now / 420)) % Math.max(1, r.w));
+      ctx.fillRect(runeX, r.y + Math.max(0, r.h - 2), 1, 1);
     } else if (this.activeTheme === 'horror') {
-      ctx.fillStyle = '#08090a'; ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.fillStyle = `rgba(125,15,25,${0.45 + Math.sin(now / 90) * 0.2})`;
-      for (let y = r.y + ((now / 55) | 0) % 4; y < r.y + r.h; y += 4) ctx.fillRect(r.x, y, r.w, 1);
-      ctx.fillStyle = '#d5ccc0'; ctx.fillRect(r.x + Math.floor(r.w / 2), r.y + Math.floor(r.h / 2), 1, 1);
+      // Interferência fixa e baixa: inquietante, mas sem pulsação ou scanline rápida.
+      ctx.fillStyle = 'rgba(5,5,7,0.43)'; ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = 'rgba(115,105,108,0.22)';
+      for (let y = r.y + (seed & 3); y < r.y + r.h; y += 4) ctx.fillRect(r.x, y, r.w, 1);
+      ctx.fillStyle = 'rgba(213,204,192,0.72)';
+      ctx.fillRect(r.x + Math.floor(r.w / 2), r.y + Math.floor(r.h / 2), 1, 1);
     } else {
-      ctx.fillStyle = '#071d2b'; ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = '#42f5d4';
-      for (let x = r.x + 1; x < r.x + r.w; x += 4) { ctx.beginPath(); ctx.moveTo(x, r.y); ctx.lineTo(x, r.y + r.h); ctx.stroke(); }
-      ctx.fillStyle = '#bd77ff'; ctx.fillRect(r.x, r.y + (((now / 80) | 0) % Math.max(1, r.h)), r.w, 1);
+      // HUD holográfico translúcido: código, TV e videogame continuam legíveis por baixo.
+      ctx.fillStyle = 'rgba(0,35,49,0.30)'; ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = 'rgba(66,245,212,0.34)';
+      for (let x = r.x + 1; x < r.x + r.w; x += 4) ctx.fillRect(x, r.y, 1, r.h);
+      ctx.fillStyle = 'rgba(189,119,255,0.78)';
+      ctx.fillRect(r.x, r.y + (Math.floor(now / 120) % Math.max(1, r.h)), r.w, 1);
     }
     ctx.restore();
   }
@@ -928,15 +937,9 @@ export class Renderer {
   private drawCharacter(ch: Character, now: number, sel: { agent: string | null; hover: string | null }): void {
     const { ctx } = this;
     const head = this.headOf(ch);
-    // faixa lateral de quem anda (dois no mesmo caminho não viram um boneco de duas cabeças)
-    let themeDx = 0;
-    let themeDy = 0;
-    const phase = (ch.info.seed % 997) / 997 * Math.PI * 2;
-    if (this.activeTheme === 'medieval') themeDy = ch.pose === 'walk' || ch.pose === 'run' ? Math.round(Math.sin(ch.animT / 80 + phase)) : 0;
-    else if (this.activeTheme === 'horror') themeDx = Math.sin(now / 47 + phase) > 0.985 ? 1 : 0;
-    else if (this.activeTheme === 'alien') themeDy = Math.round(Math.sin(now / 430 + phase) * 1.5);
-    const x = Math.round(ch.x + ch.offX + themeDx);
-    const y = Math.round(ch.y + ch.offY + themeDy);
+    // O tema nunca desloca os pés: navegação, animação-base e hit-test usam a mesma âncora.
+    const x = Math.round(ch.x + ch.offX);
+    const y = Math.round(ch.y + ch.offY);
     ctx.globalAlpha = ch.alpha;
     // anéis no chão (seleção, hover, alerta)
     if (ch.mode === 'wait') this.drawAlertRing(x, y, now);
@@ -954,8 +957,6 @@ export class Renderer {
     req.held = ch.held;
     req.seated = ch.seated;
     const themeVisual = visualForCharacter(this.activeTheme, ch);
-    if (themeVisual?.pose) req.pose = themeVisual.pose;
-    if (themeVisual?.held) req.held = themeVisual.held;
     try {
       sprite = this.charSprite(req, ch.animT);
     } catch {
@@ -1034,6 +1035,8 @@ export class Renderer {
   /** Alterna sprites estaticos preconstruidos; nenhuma forma e improvisada no cenario. */
   private drawCharacterThemeFrames(visual: ThemeActivityVisual | null, ch: Character, x: number, y: number, now: number): void {
     if (!visual || this.activeTheme === 'original') return;
+    this.ctx.save();
+    this.ctx.globalAlpha = ch.alpha;
     const draw = (effect: ThemeEffect, ox: number, oy: number, speed: number) => {
       const count = themeEffectFrameCount(effect);
       const frame = (Math.floor(now / speed) + (ch.info.seed % count)) % count;
@@ -1049,6 +1052,7 @@ export class Renderer {
       const [ox, oy] = orbit[frame];
       draw(visual.companion, ox, oy, 110);
     }
+    this.ctx.restore();
   }
 
   private pushIcon(x: number, y: number, name: IconName, bounce: number, alpha: number, badge: number): void {
@@ -1266,7 +1270,33 @@ export class Renderer {
 
   private drawCar(car: Car): void {
     const s = carSprite(car.variant, car.dir < 0, this.activeTheme);
-    this.ctx.drawImage(s.canvas, Math.round(car.x - s.ax), Math.round(car.y - s.ay));
+    const x = Math.round(car.x - s.ax);
+    const y = Math.round(car.y - s.ay);
+    const ctx = this.ctx;
+    ctx.drawImage(s.canvas, x, y);
+    if (this.activeTheme === 'original') return;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x, y, s.canvas.width, s.canvas.height); ctx.clip();
+    if (this.activeTheme === 'medieval') {
+      // Carruagem de guilda: painéis, ferragens e cubos de roda sobre o mesmo volume/rota do carro.
+      ctx.fillStyle = 'rgba(92,55,28,0.72)'; ctx.fillRect(x + 4, y + 10, 28, 4);
+      ctx.fillStyle = '#d6ad4d'; ctx.fillRect(x + 16, y + 9, 4, 1);
+      ctx.fillRect(x + 17, y + 10, 2, 3);
+      ctx.fillStyle = '#9e7b43'; ctx.fillRect(x + 9, y + 15, 2, 2); ctx.fillRect(x + 26, y + 15, 2, 2);
+    } else if (this.activeTheme === 'horror') {
+      // Silhueta de carro fúnebre, sem animação luminosa ou gag visual.
+      ctx.fillStyle = 'rgba(5,5,7,0.58)'; ctx.fillRect(x + 8, y + 5, 18, 4);
+      ctx.fillStyle = '#595259'; ctx.fillRect(x + 9, y + 5, 1, 3);
+      ctx.fillStyle = '#65101b';
+      ctx.fillRect(car.dir > 0 ? x + 2 : x + 33, y + 11, 1, 2);
+    } else {
+      // Pod de trânsito: trilho de levitação e luzes direcionais no mesmo bounding box.
+      ctx.fillStyle = 'rgba(66,245,212,0.30)'; ctx.fillRect(x + 5, y + 17, 27, 2);
+      ctx.fillStyle = '#42f5d4';
+      for (let px = x + 7; px < x + 32; px += 6) ctx.fillRect(px, y + 15, 2, 1);
+      ctx.fillStyle = '#bd77ff'; ctx.fillRect(car.dir > 0 ? x + 31 : x + 3, y + 10, 2, 2);
+    }
+    ctx.restore();
   }
 
   private updateCars(now: number, dt: number): void {
@@ -1302,10 +1332,22 @@ export class Renderer {
       const x = left.x + 9 + (right.x - left.x - 18) * u;
       const baseY = (left.y + right.y) / 2 - 9;
       const arc = Math.sin(Math.PI * ((u * 2) % 1)) * 6;
-      ctx.fillStyle = 'rgba(30,40,60,0.35)';
-      ctx.fillRect(Math.round(x) - 1, Math.round(baseY) + 1, 2, 1);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(Math.round(x) - 1, Math.round(baseY - arc) - 1, 2, 2);
+      const px = Math.round(x);
+      const py = Math.round(baseY - arc) - 1;
+      ctx.fillStyle = this.activeTheme === 'alien' ? 'rgba(66,245,212,0.34)' : 'rgba(30,40,60,0.35)';
+      ctx.fillRect(px - 1, Math.round(baseY) + 1, 2, 1);
+      if (this.activeTheme === 'medieval') {
+        ctx.fillStyle = '#e5bd57'; ctx.fillRect(px - 1, py - 1, 2, 1);
+        ctx.fillStyle = '#f3df9a'; ctx.fillRect(px - 1, py, 2, 2);
+      } else if (this.activeTheme === 'horror') {
+        ctx.fillStyle = '#b8b1a8'; ctx.fillRect(px - 1, py, 2, 2);
+        ctx.fillStyle = 'rgba(19,15,20,0.55)'; ctx.fillRect(px + (ph < 1 ? -4 : 2), py + 1, 2, 1);
+      } else if (this.activeTheme === 'alien') {
+        ctx.fillStyle = '#42f5d4'; ctx.fillRect(px - 2, py - 1, 4, 4);
+        ctx.fillStyle = '#e7fffb'; ctx.fillRect(px - 1, py, 2, 2);
+      } else {
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(px - 1, py, 2, 2);
+      }
     }
   }
 

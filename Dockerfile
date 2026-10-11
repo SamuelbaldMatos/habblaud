@@ -20,8 +20,7 @@ COPY . .
 RUN npm run build
 
 # ---------------------------------------------------------------------------------------------
-# Estágio 2: runtime enxuto. O servidor não tem dependências de runtime (só módulos node:*),
-# então basta o dist/ e o package.json (nome, versão e "type": "module").
+# Estágio 2: runtime com o servidor compilado e as ferramentas do projeto disponíveis em /workspace.
 # ---------------------------------------------------------------------------------------------
 FROM node:24-alpine AS runtime
 
@@ -37,12 +36,16 @@ WORKDIR /app
 
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules /workspace/node_modules
+
+# O volume de dependências é preenchido a partir deste diretório na primeira inicialização.
+RUN chown -R node:node /workspace/node_modules
 
 # Estado do Habblaud (nomes persistidos). O volume nomeado herda este dono na primeira montagem.
 RUN mkdir -p /data && chown node:node /data
 
-# Usuário sem privilégios (já existe na imagem oficial do Node). O código fica com dono root,
-# então o processo não consegue alterá-lo; só /data é gravável.
+# Usuário sem privilégios (já existe na imagem oficial do Node). O app em /app fica somente leitura;
+# o volume /workspace é montado pelo Compose para permitir edições e verificações sob aprovação.
 USER node
 
 EXPOSE 4747

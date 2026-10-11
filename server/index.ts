@@ -25,6 +25,9 @@ import { ClaudeWatcher } from './sources/watcher';
 import { createBuildReader } from './build';
 import { UpdateChecker } from './updates/checker';
 import { ThemeStore } from './theme';
+import { VscodeActivitySource } from './sources/vscode';
+import { CodexWatcher } from './sources/codex-watcher';
+import { createOmnirouteHandler } from './http/omniroute';
 
 const config = loadConfig();
 const startedAt = Date.now();
@@ -45,7 +48,13 @@ const theme = new ThemeStore(join(config.dataDir, 'theme.json'));
 theme.load();
 
 // Office, contas e watcher se referenciam (avisos de mudança / fontes): ligação tardia.
-const late: { office?: Office; watcher?: ClaudeWatcher; permissions?: PermissionRegistry } = {};
+const late: {
+  office?: Office;
+  watcher?: ClaudeWatcher;
+  permissions?: PermissionRegistry;
+  vscode?: VscodeActivitySource;
+  codex?: CodexWatcher;
+} = {};
 // Versão nova: consulta a release mais recente no GitHub a cada 6 h (HABBLAUD_UPDATE_CHECK=0 desliga).
 const updates = new UpdateChecker({
   current: config.version,
@@ -69,15 +78,19 @@ const office = new Office({
   build: config.dev ? undefined : createBuildReader(config.rootDir),
   startedAt,
   accounts: (sessions) => accounts.list(sessions),
-  sources: () => late.watcher?.sources() ?? [],
+  sources: () => [...(late.watcher?.sources() ?? []), ...(late.codex?.sources() ?? []), ...(late.vscode?.sources() ?? [])],
   accountName: (id) => accounts.find(id)?.detected.name,
   terminal: config.terminal,
   permissions: () => late.permissions?.snapshot() ?? new Map(),
   updates: () => updates.status(),
 });
 const watcher = new ClaudeWatcher({ accounts, office, inDocker: config.inDocker });
+const codex = new CodexWatcher({ sessionsDir: config.codexSessionsDir, office });
+const vscode = new VscodeActivitySource({ office, path: join(config.home, '.copilot', 'hooks') });
 late.office = office;
 late.watcher = watcher;
+late.codex = codex;
+late.vscode = vscode;
 const hub = new Hub(office);
 // "Meu dia": amostra o escritório a cada segundo e persiste em <dataDir>/stats/ (ver history/daystats.ts).
 const stats = new DayStatsService({ dir: join(config.dataDir, 'stats'), snapshot: () => hub.current() });
@@ -106,6 +119,8 @@ late.permissions = permissions;
 
 if (config.demo) office.setDemo(true);
 watcher.start();
+codex.start();
+vscode.start();
 accounts.start();
 hub.start();
 if (timeline) {
@@ -127,7 +142,7 @@ const api = createApiHandler({
   office,
   hub,
   accounts,
-  sources: () => watcher.sources(),
+  sources: () => [...watcher.sources(), ...codex.sources(), ...vscode.sources()],
   version: config.version,
   inDocker: config.inDocker,
   terminal: config.terminal,
@@ -138,6 +153,13 @@ const api = createApiHandler({
   stats,
   updates,
   theme,
+  vscode,
+  omniroute: config.terminal
+    ? createOmnirouteHandler({
+        inDocker: config.inDocker,
+  rootDir: process.env.HABBLAUD_AGENT_WORKSPACE?.trim() || (config.inDocker ? undefined : config.rootDir),
+      })
+    : undefined,
 });
 
 const server = http.createServer();
@@ -219,6 +241,8 @@ function shutdown(signal: string): void {
   clearInterval(ticker);
   stats.stop();
   watcher.stop();
+  codex.stop();
+  vscode.stop();
   accounts.stop();
   hub.stop();
   terminals?.stop();

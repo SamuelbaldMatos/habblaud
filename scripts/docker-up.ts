@@ -252,17 +252,32 @@ export function hostTimeZone(env: NodeJS.ProcessEnv = process.env): string | und
   return tz && /^[A-Za-z0-9_+\-]+(?:\/[A-Za-z0-9_+\-]+)*$/.test(tz) ? tz : undefined;
 }
 
+export function findOmnirouteToken(home: string): string | undefined {
+  try {
+    const p = join(home, '.claude', 'profiles', 'omniroute', 'settings.json');
+    if (statSync(p).isFile()) {
+      const raw = JSON.parse(readFileSync(p, 'utf8')) as { env?: Record<string, string> };
+      return raw.env?.ANTHROPIC_AUTH_TOKEN || raw.env?.ANTHROPIC_API_KEY;
+    }
+  } catch {
+    // Arquivo não existe ou não é legível
+  }
+  return undefined;
+}
+
 /**
  * `usageDir`: pasta do host com o uso capturado pelo tap de statusline (já existente; caminho real),
  * montada somente leitura em /usage. `timeZone`: fuso do host, repassado como TZ.
  */
-export function renderOverride(mounts: AccountMount[], generatedAt: Date = new Date(), usageDir?: string, timeZone?: string): string {
+export function renderOverride(mounts: AccountMount[], generatedAt: Date = new Date(), usageDir?: string, timeZone?: string, home: string = HOME): string {
+  const omnirouteToken = findOmnirouteToken(home);
   const env: Array<[string, string]> = [
     ['HABBLAUD_CLAUDE_DIRS', mounts.map((m) => m.mountDir).join(',')],
     ['HABBLAUD_ACCOUNTS', JSON.stringify(accountsPayload(mounts))],
   ];
   if (usageDir) env.push(['HABBLAUD_USAGE_DIR', CONTAINER_USAGE_DIR]);
   if (timeZone) env.push(['TZ', timeZone]);
+  if (omnirouteToken) env.push(['OMNIROUTE_TOKEN', omnirouteToken]);
   const lines = [
     `# Gerado por scripts/docker-up.ts em ${generatedAt.toISOString()} — não edite: é recriado a cada \`npm run docker:up\`.`,
     '# Contém caminhos do host e e-mails das contas: fica fora do git e com permissão 600.',

@@ -55,6 +55,21 @@ export function isLoopbackHost(host: string | undefined): boolean {
   return !!name && isLoopbackName(name);
 }
 
+/** Endereço IP de loopback de uma conexão recebida, inclusive IPv4 mapeado em IPv6. */
+export function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const value = address.toLowerCase().replace(/^\[|\]$/g, '');
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(value);
+  if (mapped) return isIP(mapped[1]) === 4 && mapped[1].startsWith('127.');
+  if (isIP(value) === 4) return value.startsWith('127.');
+  if (isIP(value) !== 6) return false;
+  try {
+    return new URL(`http://[${value}]/`).hostname === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Host aceito? IP literal (não há DNS envolvido, logo não há rebinding), `localhost`/`*.localhost`
  * (os navegadores resolvem sempre para o loopback) ou um nome de HABBLAUD_ALLOWED_HOSTS.

@@ -1,0 +1,26 @@
+{
+  "description": "Triagem cotidiana comandada por GPT; Gemini como reserva; Claude não participa do fluxo comum",
+  "models": [
+    {
+      "id": "direcionador-model-1-cx-gpt-6-sol-high",
+      "kind": "model",
+      "model": "cx/gpt-6-sol-high",
+      "providerId": "cx",
+      "weight": 0
+    },
+    {
+      "id": "direcionador-model-4-cx-gpt-6-luna-medium",
+      "kind": "model",
+      "model": "cx/gpt-6-luna-medium",
+      "providerId": "cx",
+      "weight": 0
+    },
+    {
+      "id": "direcionador-model-3-agy-gemini-3-7-flash-high",
+      "kind": "model",
+      "model": "agy/gemini-3-7-flash-high",
+      "providerId": "agy",
+      "weight": 0
+    }
+  ]
+}

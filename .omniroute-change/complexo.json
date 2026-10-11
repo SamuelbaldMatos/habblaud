@@ -1,0 +1,47 @@
+{
+  "description": "Consulta Claude para decisões difíceis; GPT fica apenas como reserva se os modelos Claude falharem",
+  "models": [
+    {
+      "id": "complexo-model-2-agy-claude-opus-4-6-thinking",
+      "kind": "model",
+      "model": "agy/claude-opus-4-6-thinking",
+      "providerId": "agy",
+      "weight": 0
+    },
+    {
+      "id": "complexo-model-3-antigravity-claude-opus-4-6-thinking",
+      "kind": "model",
+      "model": "antigravity/claude-opus-4-6-thinking",
+      "providerId": "antigravity",
+      "weight": 0
+    },
+    {
+      "id": "complexo-model-5-cc-claude-opus-5-5",
+      "kind": "model",
+      "model": "cc/claude-opus-5-5",
+      "providerId": "cc",
+      "weight": 0
+    },
+    {
+      "id": "complexo-model-6-cc-claude-opus-5",
+      "kind": "model",
+      "model": "cc/claude-opus-5",
+      "providerId": "cc",
+      "weight": 0
+    },
+    {
+      "id": "complexo-model-1-cx-gpt-6-astra-xhigh",
+      "kind": "model",
+      "model": "cx/gpt-6-astra-xhigh",
+      "providerId": "cx",
+      "weight": 0
+    },
+    {
+      "id": "complexo-model-4-cx-gpt-5-5-xhigh",
+      "kind": "model",
+      "model": "cx/gpt-5.5-xhigh",
+      "providerId": "cx",
+      "weight": 0
+    }
+  ]
+}

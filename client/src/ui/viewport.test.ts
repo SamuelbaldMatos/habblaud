@@ -9,6 +9,8 @@ const desktop: PanelGeometry = {
   drawerLeft: 1050,
   drawerTop: 74,
   drawerSheet: false,
+  workspaceLeft: 1080,
+  workspaceOpen: false,
   feedOpenH: 200,
   feedClosedH: 38,
   feedMargin: 10,
