@@ -62,7 +62,9 @@ services:
       HABBLAUD_CODEX: ${HABBLAUD_CODEX:-}
       # 1 liga o Novo agente pelo escritório (no Docker, quem começa a sessão é o auxiliar do host, npm run
       # codex:bridge; o terminal interativo em si não roda no container).
-      HABBLAUD_PTY: ${HABBLAUD_PTY:-}
+      HABBLAUD_PTY: ${HABBLAUD_PTY:-1}
+      # Pasta do container = pasta do PC, para o Novo agente (e o Jarvis) abrirem a sessão no lugar certo.
+      HABBLAUD_HOST_PATHS: ${HABBLAUD_HOST_PATHS:-/projetos/I=I:/;/workspace=C:/Users/sam_1/habblaud-1.0.3}
       # Acesso remoto com login (server/http/remote.ts).
       HABBLAUD_REMOTE_USER: ${HABBLAUD_REMOTE_USER:-}
       HABBLAUD_REMOTE_PASSWORD_HASH: ${HABBLAUD_REMOTE_PASSWORD_HASH:-}

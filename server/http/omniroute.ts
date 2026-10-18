@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import { HttpError, readJson, sendJson } from './app';
 import { isLoopbackAddress, isLoopbackHost } from './guard';
 import { AgentRuntime, MANAGER_COMBOS, type AgentModel, type AgentModelReply, type AgentStreamEvent, type ManagerCombo } from './agent-runtime';
+import type { SessionLauncher } from './session-launcher';
+import { handleThreadsRoute, ThreadStore } from './threads';
 import { createAgentMemory } from './agent-memory';
 import { ProjectContextCache } from './project-context';
 import { discoverWorkspaces } from './workspaces';
@@ -186,11 +188,15 @@ export function createOmnirouteHandler(opts: {
   roots?: string[];
   /** Pasta do cache do cartão do projeto (no Docker, /data/context). */
   contextDir?: string;
+  /** Pasta das conversas do estúdio (o histórico sobrevive a trocar de navegador). Ausente = sem histórico no servidor. */
+  threadsDir?: string;
   onOmniUsage?: (byEmail: ReadonlyMap<string, AccountUsage>) => void;
   /** Liga a leitura periódica do estado do OmniRoute (o servidor real liga; os testes não). */
   pollOmniStatus?: boolean;
   /** Cada evento das tarefas do estúdio (o Jarvis do escritório acompanha). */
   onJobEvent?: (job: { id: string; title: string }, event: AgentStreamEvent) => void;
+  /** Novo agente do escritório: o Jarvis abre sessões do Claude Code com aprovação. */
+  launcher?: SessionLauncher;
 }): (req: IncomingMessage, res: ServerResponse, path: string) => boolean {
   // Estado e cotas do OmniRoute (cache de 60 s, renovado a cada 2 min): alimenta o painel e o uso das contas.
   const omniStatus = new OmniStatusService({
@@ -279,11 +285,16 @@ export function createOmnirouteHandler(opts: {
     context: { get: (ws, dir) => projectContext.get(ws, dir), render: (card) => projectContext.render(card) },
     maxTotalTokens: process.env.HABBLAUD_AGENT_TOKEN_BUDGET ? Number(process.env.HABBLAUD_AGENT_TOKEN_BUDGET) : undefined,
     onEvent: opts.onJobEvent,
+    launcher: opts.launcher,
   }) : undefined;
+
+  const threads = opts.threadsDir ? new ThreadStore(opts.threadsDir) : undefined;
 
   return (req, res, path) => {
     if (!path.startsWith('/api/omniroute')) return false;
     const method = req.method ?? 'GET';
+
+    if (threads && handleThreadsRoute(req, res, path, { store: threads, local: (r) => localRequest(r, opts) })) return true;
 
     if (path === '/api/omniroute/combos') {
       if (method !== 'GET') {

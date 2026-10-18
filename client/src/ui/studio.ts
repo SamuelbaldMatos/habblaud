@@ -169,8 +169,9 @@ function stored(key: string): unknown {
   }
 }
 
-function loadConversation(threadId: string): Conversation {
-  const data = obj(stored(`thread:${threadId}`));
+/** `raw` vem do armazenamento local ou do histórico no servidor; os dois passam pela mesma validação. */
+function loadConversation(threadId: string, raw: unknown = stored(`thread:${threadId}`)): Conversation {
+  const data = obj(raw);
   const state = freshConversation(threadId);
   if (data.version !== 1 || data.threadId !== threadId) return state;
 
@@ -308,6 +309,9 @@ export class StudioPanel implements UiComponent {
 
   private readonly workspace = h('select', { attrs: { 'aria-label': 'Workspace' } });
   private readonly jobs = h('div', { class: 'studio-jobs' });
+  /** Conversas guardadas no servidor: o histórico vale em qualquer navegador. */
+  private readonly threads = h('div', { class: 'studio-jobs studio-threads' });
+  private readonly threadSaves = new Map<string, number>();
   private readonly alerts = h('div', { class: 'studio-alerts', attrs: { 'aria-live': 'polite' } });
   private readonly usage = h('div', { class: 'studio-usage' });
   private readonly project = h('div', { class: 'studio-project' });
@@ -380,6 +384,8 @@ export class StudioPanel implements UiComponent {
         h('h2', { text: 'Workspaces' }),
         this.workspace,
         this.newChat,
+        h('h2', { text: 'Conversas' }),
+        this.threads,
         h('h2', { text: 'Tarefas' }),
         this.jobs,
         h('h2', { text: 'Alertas OmniRoute' }),
@@ -490,6 +496,7 @@ export class StudioPanel implements UiComponent {
         child.setAttribute('inert', '');
       }
       this.startPolling();
+      void this.loadThreads();
       this.el.focus();
       this.ctx.announce('Estúdio de código aberto.');
     } else {
@@ -586,6 +593,65 @@ export class StudioPanel implements UiComponent {
       setText(this.storageWarning, 'Não foi possível salvar localmente. A continuidade após recarregar pode ser perdida.');
       setHidden(this.storageWarning, false);
     }
+    this.saveRemote(state);
+  }
+
+  /** Grava a conversa no servidor, agrupando as mudanças de um segundo e meio numa só requisição. */
+  private saveRemote(state: Conversation): void {
+    if (!state.messages.some((m) => m.role === 'user')) return;
+    const id = state.threadId;
+    window.clearTimeout(this.threadSaves.get(id));
+    this.threadSaves.set(id, window.setTimeout(() => {
+      this.threadSaves.delete(id);
+      const first = state.messages.find((m) => m.role === 'user');
+      const body = {
+        title: (first?.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 80) || `Conversa ${id.slice(0, 8)}`,
+        workspace: state.workspace,
+        manager: state.manager,
+        updatedAt: new Date().toISOString(),
+        messages: state.messages,
+      };
+      fetch(`${API}/threads/${encodeURIComponent(id)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      }).then((response) => { if (response.ok && this.opened) void this.loadThreads(); })
+        // Sem servidor de histórico a conversa continua no armazenamento local.
+        .catch(() => undefined);
+    }, 1500));
+  }
+
+  private async loadThreads(): Promise<void> {
+    try {
+      const data = await this.getJson(`${API}/threads`, AbortSignal.timeout(10_000));
+      const items = list(data.threads).map(obj).filter((t) => str(t.id)).slice(0, 30);
+      this.threads.replaceChildren(...items.map((t) => {
+        const id = str(t.id);
+        const button = action([str(t.title, id), `${str(t.workspace, '—')} · ${dateLabel(t.updatedAt)}`].join('\n'), () => void this.openThread(id));
+        button.className = `studio-job${id === this.state.threadId ? ' is-active' : ''}`;
+        return button;
+      }));
+      if (!items.length) this.threads.append(h('p', { class: 'studio-muted', text: 'Nenhuma conversa guardada ainda.' }));
+    } catch {
+      this.threads.replaceChildren(h('p', { class: 'studio-muted', text: 'Histórico no servidor indisponível; as conversas ficam neste navegador.' }));
+    }
+  }
+
+  private async openThread(id: string): Promise<void> {
+    if (id === this.state.threadId || (this.state.active && !this.state.jobId)) return;
+    // A cópia local guarda também a tarefa e o cursor; sem ela, usa o histórico do servidor.
+    let state = loadConversation(id);
+    if (!state.messages.length) {
+      try {
+        const doc = await this.getJson(`${API}/threads/${encodeURIComponent(id)}`, AbortSignal.timeout(10_000));
+        state = loadConversation(id, { ...doc, version: 1, threadId: id, jobId: null, seq: -1, active: false, activities: [] });
+      } catch (error) {
+        this.report(errorText(error));
+        return;
+      }
+    }
+    this.switchConversation(state);
+    this.selectTab('chat');
+    void this.loadThreads();
+    if (this.opened) void this.loadProject();
   }
 
   private addMessage(message: Message): void {

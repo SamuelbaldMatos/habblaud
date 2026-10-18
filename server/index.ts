@@ -65,6 +65,7 @@ import { JARVIS_ROOM_CWD, JarvisSource } from './sources/jarvis';
 import { normalizeCwd } from './model/rooms';
 import { CodexWatcher } from './sources/codex-watcher';
 import { createOmnirouteHandler } from './http/omniroute';
+import { createSessionLauncher, hostPathMapper } from './http/session-launcher';
 
 const config = loadConfig();
 const startedAt = Date.now();
@@ -420,9 +421,12 @@ const api = createApiHandler({
         // Raízes com outros projetos (um nível abaixo vira workspace); vazio = só o Habblaud.
         roots: (process.env.HABBLAUD_AGENT_ROOTS ?? '').split(',').filter((r) => r.trim()),
         contextDir: process.env.HABBLAUD_CONTEXT_DIR?.trim() || undefined,
+        threadsDir: join(config.dataDir, 'studio-threads'),
         onOmniUsage: (byEmail) => accounts.applyOmniroute(byEmail),
         onJobEvent: (job, ev) => jarvis.onJob({ jobId: job.id, title: job.title, type: ev.type, activity: ev.activity, model: ev.model, error: ev.error }),
         pollOmniStatus: true,
+        // O Jarvis abre sessões do Claude Code pelo mesmo Novo agente do escritório (HABBLAUD_PTY=1).
+        launcher: spawn ? createSessionLauncher({ spawn, hostPath: hostPathMapper(process.env) }) : undefined,
       })
     : undefined,
   remote: config.remote ? { is: isRemoteRequest, allows: (f) => config.remote!.allow.has(f) } : undefined,

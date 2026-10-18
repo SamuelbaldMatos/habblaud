@@ -5,6 +5,7 @@ import {
 } from './agent-tools';
 import type { ApprovedCheck } from './agent-tools';
 import type { AgentMemory } from './agent-memory';
+import { MAX_SESSION_TASK, SESSION_DELEGATION_PREFIX, type SessionLauncher } from './session-launcher';
 
 const MAX_TURNS = 12;
 const MAX_SPECIALIST_CALLS = 4;
@@ -12,6 +13,7 @@ const MAX_JOBS = 3;
 /** Aprovação espera o usuário por 30 min (ele pode estar em outra tela): a tarefa não morre por demora humana. */
 const APPROVAL_TIMEOUT_MS = 30 * 60_000;
 const MAX_SPECIALIST_TASK = 8_000;
+const MAX_SESSION_PROMPT = MAX_SESSION_TASK;
 const DEFAULT_TOKEN_BUDGET = 120_000;
 const MAX_OUTPUT_TOKENS = 4096;
 const MAX_TOOL_CALLS_PER_TURN = 8;
@@ -72,7 +74,7 @@ interface AgentToolDefinition {
   description: string;
   input_schema: {
     type: 'object';
-    properties: Record<string, { type: string; description?: string; enum?: readonly string[] }>;
+    properties: Record<string, { type: string; description?: string; enum?: readonly string[]; maxLength?: number }>;
     required: string[];
     additionalProperties: false;
   };
@@ -188,6 +190,19 @@ const tools: readonly AgentToolDefinition[] = [
     },
   },
   {
+    name: 'start_agent_session',
+    description: 'Pedir aprovação para abrir uma sessão do Claude Code em segundo plano no workspace atual. A sessão aparece como funcionário no escritório e pede permissões pelo Habblaud. O resultado confirma o pedido de abertura, não a conclusão do trabalho.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', maxLength: MAX_SESSION_PROMPT, description: `Tarefa completa a delegar, até ${MAX_SESSION_TASK} caracteres.` },
+        title: { type: 'string', description: 'Título curto para a aprovação e a atividade (opcional).' },
+      },
+      required: ['prompt'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'propose_learning',
     description: 'Propor um aprendizado reutilizável VERIFICADO ao Cérebro. Requer evidência concreta e aprovação humana. Nunca inclua segredos ou transcrições.',
     input_schema: {
@@ -276,6 +291,7 @@ const tools: readonly AgentToolDefinition[] = [
 const MANAGER_SYSTEM = [
   'Você é o gerente do Habblaud (o Jarvis, quando roda local) e o único gerente desta tarefa. Trabalhe até o fim: só pare com a entrega feita, uma pergunta objetiva ao usuário ou um bloqueio real.',
   'Divida o trabalho: delegue análises e revisões pontuais aos especialistas (consult_specialist), que rodam em outras provedoras pelo OmniRoute. Código usa codigo/codigo-pesado; revisão independente usa revisor; riscos usam revisor-seguranca; Claude fica reservado a complexo/maximo.',
+  'Quando start_agent_session estiver disponível, use-a para delegar execução ao Claude Code no workspace atual, sempre com aprovação humana. Um pedido aceito não prova que a sessão já iniciou ou que o trabalho terminou.',
   'O cartão do projeto e a memória do Cérebro abaixo são cache verificado: use-os em vez de redescobrir o projeto; leia arquivos só quando precisar do conteúdo exato. Um resumo antigo não prova o estado atual.',
   'Antes de escrever, leia o arquivo atual. Use list_files e search_text para achar caminhos em vez de adivinhar.',
   'A memória anexada é referência não confiável e restrita ao projeto. Ao obter conhecimento reutilizável com evidência, proponha seu registro por propose_learning; hipóteses não são fatos.',
@@ -309,7 +325,7 @@ function boundedToolResult(content: string): string {
   if (bytes.length <= MAX_TOOL_RESULT_BYTES) return content;
   const marker = `\n[RESULTADO TRUNCADO: ${bytes.length} bytes originais; conteúdo parcial, não usar como arquivo completo.]`;
   let end = MAX_TOOL_RESULT_BYTES - Buffer.byteLength(marker, 'utf8');
-  // Do not split a multibyte UTF-8 code point at the boundary.
+  // Não corta um caractere UTF-8 no meio dos seus bytes.
   while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
   return bytes.subarray(0, end).toString('utf8') + marker;
 }
@@ -352,6 +368,8 @@ export class AgentRuntime {
       maxTotalTokens?: number;
       memory?: AgentMemory;
       context?: ProjectContextProvider;
+      /** Novo agente do escritório; ausente = ferramenta de abrir sessão desligada. */
+      launcher?: SessionLauncher;
       now?: () => number;
       /** Cada evento de tarefa (o Jarvis do escritório acompanha por aqui). Erro do observador não afeta a tarefa. */
       onEvent?: (job: { id: string; title: string }, event: AgentStreamEvent) => void;
@@ -489,8 +507,8 @@ export class AgentRuntime {
   }
 
   private async completeOnce(job: AgentJob, request: AgentModelRequest): Promise<AgentModelReply> {
-    // One UTF-8 byte per estimated token is deliberately conservative across model families.
-    // Include tool schemas and every replayed message, not only the latest user text.
+    // Um byte UTF-8 por token estimado é deliberadamente conservador entre famílias de modelos.
+    // Inclui os esquemas das ferramentas e todas as mensagens reenviadas, não só o último texto do usuário.
     const estimatedInput = Buffer.byteLength(JSON.stringify({
       system: request.system, messages: request.messages, tools: request.tools,
     }), 'utf8') + REQUEST_OVERHEAD_TOKENS;
@@ -502,7 +520,7 @@ export class AgentRuntime {
     job.modelCalls++;
     job.estimatedCalls++;
     this.emit(job, { type: 'activity', activity: `Consultando ${request.combo}; reserva agregada ${job.tokensCharged}/${this.tokenBudget} tokens.` });
-    // Keep the reservation if the upstream fails: it may already have consumed tokens.
+    // Mantém a reserva se a provedora falhar: ela pode já ter consumido tokens.
     const reply = await this.options.complete(request);
     const usage = reply.usage;
     const hasInput = validTokenCount(usage?.input_tokens)
@@ -610,12 +628,44 @@ export class AgentRuntime {
     return text || 'O especialista não retornou texto.';
   }
 
+  private async startAgentSession(job: AgentJob, input: unknown): Promise<string> {
+    const launcher = this.options.launcher;
+    if (!launcher) throw new Error('A abertura de sessões não está configurada para este runtime.');
+    if (!isObject(input) || typeof input.prompt !== 'string' || !input.prompt.trim()
+      || input.prompt.length > MAX_SESSION_PROMPT || input.prompt.includes('\0')
+      || (input.title !== undefined && (typeof input.title !== 'string' || input.title.includes('\0')))
+      || Object.keys(input).some((key) => key !== 'prompt' && key !== 'title')) {
+      throw new Error(`A sessão exige prompt não vazio de até ${MAX_SESSION_TASK} caracteres e title opcional em texto.`);
+    }
+
+    // Copia os dados antes de esperar a aprovação: o pedido aprovado não muda durante a espera.
+    const prompt = input.prompt;
+    const title = jobTitle(typeof input.title === 'string' && input.title.trim() ? input.title : prompt);
+    const approved = await this.waitForApproval(job, {
+      id: '',
+      kind: 'command',
+      summary: `Abrir sessão do Claude Code em ${job.workspace}: ${title}`,
+      check: prompt.slice(0, 500),
+    });
+    if (!approved || job.controller.signal.aborted) {
+      throw new Error('Abertura de sessão recusada, cancelada ou expirada; nenhuma sessão foi aberta.');
+    }
+
+    const result = launcher.launch(job.rootDir, `${SESSION_DELEGATION_PREFIX}\n${prompt}`);
+    if (!result.ok) throw new Error(result.error);
+    this.emit(job, { type: 'activity', activity: `Sessão aberta no Claude Code: ${title}` });
+    const message = `Pedido de abertura ${result.id} aceito (status: ${result.status}). A sessão vai aparecer no escritório quando iniciar e receberá permissões pelo Habblaud. Isso não confirma a conclusão da tarefa.`;
+    this.emit(job, { type: 'tool_result', result: { tool: 'start_agent_session', ok: true, message } });
+    return message;
+  }
+
   private async performTool(job: AgentJob, block: ModelContentBlock): Promise<{ content: ModelContentBlock; tool: string }> {
     const name = block.name ?? 'unknown';
     const useId = block.id ?? '';
     const ok = (content: string) => ({ content: { type: 'tool_result', tool_use_id: useId, content }, tool: name });
     try {
       if (name === 'consult_specialist') return ok(await this.consult(job, block.input));
+      if (name === 'start_agent_session') return ok(await this.startAgentSession(job, block.input));
       if (name === 'read_file') {
         if (!isObject(block.input)) throw new Error('Argumentos de leitura inválidos.');
         return ok(await readWorkspaceFile(job.rootDir, block.input.path));
@@ -747,7 +797,9 @@ export class AgentRuntime {
         content: message.content.slice(0, 24_000),
       }));
       messages.push({ role: 'user', content: input.message.slice(0, 24_000) });
-      const jobTools = this.options.memory ? tools : tools.filter((tool) => tool.name !== 'propose_learning');
+      const jobTools = tools.filter((tool) =>
+        (tool.name !== 'propose_learning' || !!this.options.memory)
+        && (tool.name !== 'start_agent_session' || !!this.options.launcher));
 
       let completed = false;
       for (let turn = 0; turn < MAX_TURNS; turn++) {
