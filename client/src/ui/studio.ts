@@ -1,4 +1,4 @@
-// Estúdio de código: conversas persistentes, tarefas reanexáveis e aprovações explícitas.
+// Estúdio de código: conversas persistentes, tarefas reanexáveis, aprovações e decisões explícitas.
 import type { UiComponent, UiContext } from './context';
 import { h, setAttr, setHidden, setText } from './dom';
 import { renderMarkdown } from './markdown';
@@ -7,6 +7,21 @@ import './studio.css';
 
 type Json = Record<string, unknown>;
 type Tab = 'tasks' | 'chat' | 'usage';
+type Manager = 'orquestrador' | 'gerente-jarvis';
+
+interface StudioDecision {
+  id: string;
+  question: string;
+  options: string[];
+  recommended?: number;
+  status: 'pending' | 'answered' | 'expired';
+  choice?: number;
+  note?: string;
+}
+
+type StudioStreamEvent =
+  | ReturnType<typeof parseOmniRouteStreamEvent>
+  | { type: 'decision'; seq?: number; decision: StudioDecision };
 
 interface Message {
   id: string;
@@ -15,6 +30,7 @@ interface Message {
   jobId?: string;
   error?: boolean;
   approval?: OmniRouteApproval;
+  decision?: StudioDecision;
   result?: { tool: string; ok: boolean; message: string };
 }
 
@@ -26,6 +42,7 @@ interface Conversation {
   active: boolean;
   workspace: string;
   model: string;
+  manager: Manager;
   messages: Message[];
   activities: string[];
 }
@@ -35,6 +52,7 @@ interface MessageView {
   body: HTMLElement;
   content: string;
   approvalStatus: string;
+  decisionStatus: string;
 }
 
 const PREFIX = 'habblaud_studio_v1:';
@@ -88,6 +106,44 @@ function action(label: string, click: () => void): HTMLButtonElement {
   return h('button', { type: 'button', text: label, on: { click } });
 }
 
+function parseDecision(value: unknown): StudioDecision {
+  const data = obj(value);
+  const options = list(data.options);
+  if (
+    !str(data.id) || typeof data.question !== 'string' ||
+    !options.length || !options.every((option): option is string => typeof option === 'string')
+  ) {
+    throw new Error('Evento de decisão inválido.');
+  }
+
+  const decision: StudioDecision = {
+    id: str(data.id),
+    question: data.question,
+    options: [...options],
+    status: 'pending',
+  };
+  const recommended = num(data.recommended);
+  if (
+    recommended !== undefined && Number.isInteger(recommended) &&
+    recommended >= 0 && recommended < options.length
+  ) {
+    decision.recommended = recommended;
+  }
+  return decision;
+}
+
+/** Intercepta decisões localmente; os demais eventos mantêm o parser compartilhado. */
+function parseStudioStreamEvent(payload: string, envelope: Json): StudioStreamEvent {
+  if (envelope.type !== 'decision') return parseOmniRouteStreamEvent(payload);
+  const event: StudioStreamEvent = {
+    type: 'decision',
+    decision: parseDecision(envelope.decision),
+  };
+  const seq = num(envelope.seq);
+  if (seq !== undefined) event.seq = seq;
+  return event;
+}
+
 function freshConversation(threadId = uid()): Conversation {
   return {
     version: 1,
@@ -97,6 +153,7 @@ function freshConversation(threadId = uid()): Conversation {
     active: false,
     workspace: '',
     model: '',
+    manager: 'orquestrador',
     messages: [],
     activities: [],
   };
@@ -122,6 +179,7 @@ function loadConversation(threadId: string): Conversation {
   state.active = data.active === true && state.jobId !== null;
   state.workspace = str(data.workspace);
   state.model = str(data.model);
+  state.manager = data.manager === 'gerente-jarvis' ? 'gerente-jarvis' : 'orquestrador';
   state.activities = list(data.activities).filter((v): v is string => typeof v === 'string').slice(-100);
 
   const ids = new Set<string>();
@@ -164,6 +222,27 @@ function loadConversation(threadId: string): Conversation {
       }
     } catch {
       // Descarta apenas os detalhes inválidos da mensagem.
+    }
+
+    try {
+      if (item.decision) {
+        const decision = parseDecision(item.decision);
+        const saved = obj(item.decision);
+        const choice = num(saved.choice);
+        if (
+          saved.status === 'answered' && choice !== undefined &&
+          Number.isInteger(choice) && choice >= 0 && choice < decision.options.length
+        ) {
+          decision.status = 'answered';
+          decision.choice = choice;
+        } else if (saved.status === 'expired') {
+          decision.status = 'expired';
+        }
+        if (typeof saved.note === 'string') decision.note = saved.note.slice(0, 500);
+        message.decision = decision;
+      }
+    } catch {
+      // Uma decisão inválida não elimina os outros detalhes da mensagem.
     }
     state.messages.push(message);
   }
@@ -235,7 +314,12 @@ export class StudioPanel implements UiComponent {
   private readonly timeline = h('div', {
     class: 'studio-timeline', tabIndex: 0, attrs: { 'aria-label': 'Mensagens da conversa' },
   });
+  private readonly heading = h('h1', { text: 'Estúdio de código' });
   private readonly model = h('span', { class: 'studio-muted' });
+  private readonly manager = h('select', { attrs: { 'aria-label': 'Gerente' } },
+    h('option', { text: 'Orquestrador (nuvem)', attrs: { value: 'orquestrador' } }),
+    h('option', { text: 'Jarvis (local)', attrs: { value: 'gerente-jarvis' } }),
+  );
   private readonly connection = h('span', { class: 'studio-muted', role: 'status' });
   private readonly storageWarning = h('p', { class: 'studio-error', hidden: true, role: 'status' });
   private readonly activitySummary = h('summary', { text: 'Atividade' });
@@ -258,6 +342,7 @@ export class StudioPanel implements UiComponent {
   private readonly columns: Record<Tab, HTMLElement>;
   private readonly tabs: Record<Tab, HTMLButtonElement>;
   private readonly views = new Map<string, MessageView>();
+  private readonly respondingDecisions = new WeakSet<StudioDecision>();
 
   private transport: AbortController | null = null;
   private polling: AbortController | null = null;
@@ -276,7 +361,7 @@ export class StudioPanel implements UiComponent {
       class: 'ui-icon-btn studio-launch',
       type: 'button',
       text: '⌨ Estúdio',
-      title: 'Estúdio de código (C)',
+      title: 'Estúdio de código (C) · Jarvis (J)',
       attrs: { 'aria-haspopup': 'dialog', 'aria-expanded': 'false' },
       on: { click: () => this.toggle() },
     });
@@ -301,7 +386,13 @@ export class StudioPanel implements UiComponent {
         this.alerts,
       ),
       chat: h('section', { class: 'studio-column studio-center', attrs: { 'aria-label': 'Conversa' } },
-        h('div', { class: 'studio-conversation-meta' }, this.model, this.connection),
+        h('div', { class: 'studio-conversation-meta' },
+          this.model,
+          h('label', { class: 'studio-manager' },
+            h('span', { text: 'Gerente' }), this.manager,
+          ),
+          this.connection,
+        ),
         this.storageWarning,
         this.timeline,
         h('details', { class: 'studio-activity' }, this.activitySummary, this.activityList),
@@ -328,7 +419,7 @@ export class StudioPanel implements UiComponent {
       attrs: { 'aria-modal': 'true', 'aria-label': 'Estúdio de código' },
     },
     h('header', { class: 'studio-header' },
-      h('h1', { text: 'Estúdio de código' }),
+      this.heading,
       action('Fechar · Esc', () => this.toggle(false)),
     ),
     nav,
@@ -338,6 +429,13 @@ export class StudioPanel implements UiComponent {
       this.state.workspace = this.workspace.value;
       this.save();
       void this.loadProject();
+    });
+    this.manager.addEventListener('change', () => {
+      if (!this.state.active) {
+        this.state.manager = this.manager.value === 'gerente-jarvis' ? 'gerente-jarvis' : 'orquestrador';
+        this.save();
+      }
+      this.render();
     });
     this.recipe.addEventListener('change', () => this.applyRecipe());
     this.input.addEventListener('keydown', (event) => {
@@ -364,6 +462,16 @@ export class StudioPanel implements UiComponent {
 
   get isOpen(): boolean {
     return this.opened;
+  }
+
+  openJarvis(): void {
+    // A seleção vale para o próximo POST; não cancela nem reinicia uma tarefa já enviada.
+    this.state.manager = 'gerente-jarvis';
+    this.save();
+    this.render();
+    this.toggle(true);
+    this.selectTab('chat');
+    this.input.focus();
   }
 
   toggle(open?: boolean): void {
@@ -400,10 +508,16 @@ export class StudioPanel implements UiComponent {
     const active = this.state.active;
     this.send.disabled = active || !this.state.workspace;
     this.workspace.disabled = active;
+    this.manager.disabled = active;
+    this.manager.value = this.state.manager;
     this.newChat.disabled = active && !this.state.jobId;
     this.stop.disabled = !active || !this.state.jobId || this.cancelling;
     setHidden(this.stop, !active);
     setText(this.model, `Modelo: ${this.state.model || 'aguardando seleção do roteador'}`);
+    const title = this.state.manager === 'gerente-jarvis'
+      ? 'Jarvis · Estúdio de código' : 'Estúdio de código';
+    setText(this.heading, title);
+    setAttr(this.el, 'aria-label', title);
   }
 
   private handleKey(event: KeyboardEvent): void {
@@ -417,20 +531,22 @@ export class StudioPanel implements UiComponent {
     const target = event.composedPath()[0];
     const editable = target instanceof HTMLElement &&
       (target.isContentEditable || Boolean(target.closest('input, textarea, select, [contenteditable]')));
-    // C (de código): o E é "entrar" na cidade do Habblaud World.
+    // C (de código) e J (de Jarvis): o E é "entrar" na cidade do Habblaud World.
+    const key = event.key.toLowerCase();
     if (
-      !editable && !event.repeat && event.key.toLowerCase() === 'c' &&
+      !editable && !event.repeat && (key === 'c' || key === 'j') &&
       !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey
     ) {
       event.preventDefault();
       event.stopImmediatePropagation();
-      this.toggle();
+      if (key === 'j') this.openJarvis();
+      else this.toggle();
       return;
     }
     if (!this.opened || event.key !== 'Tab') return;
 
     const focusable = Array.from(this.el.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]',
+      'button:not(:disabled), select:not(:disabled), textarea:not(:disabled), input:not(:disabled), a[href], summary, [tabindex="0"]',
     )).filter((element) => element.getClientRects().length > 0);
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -486,8 +602,10 @@ export class StudioPanel implements UiComponent {
   private newConversation(): void {
     if (this.state.active && !this.state.jobId) return;
     const workspace = this.state.workspace;
+    const manager = this.state.manager;
     this.switchConversation(freshConversation());
     this.state.workspace = workspace;
+    this.state.manager = manager;
     this.syncWorkspace();
     this.save();
     this.render();
@@ -566,6 +684,7 @@ export class StudioPanel implements UiComponent {
       messages: history,
       workspace: this.state.workspace,
       threadId: this.state.threadId,
+      manager: this.state.manager,
     });
   }
 
@@ -713,7 +832,7 @@ export class StudioPanel implements UiComponent {
     if (eventJob && this.state.jobId && eventJob !== this.state.jobId) return false;
     if (seq !== undefined && seq <= this.state.seq) return false;
 
-    const event = parseOmniRouteStreamEvent(payload);
+    const event = parseStudioStreamEvent(payload, envelope);
     if (eventJob && !this.state.jobId) this.assignJob(eventJob);
 
     if (event.type === 'job') {
@@ -739,6 +858,16 @@ export class StudioPanel implements UiComponent {
       if (!existing) {
         const message: Message = {
           id: uid(), role: 'system', content: '', approval: event.approval,
+        };
+        if (this.state.jobId) message.jobId = this.state.jobId;
+        this.addMessage(message);
+      }
+    } else if (event.type === 'decision') {
+      const existing = this.state.messages.find((message) =>
+        message.jobId === (this.state.jobId ?? undefined) && message.decision?.id === event.decision.id);
+      if (!existing) {
+        const message: Message = {
+          id: uid(), role: 'system', content: '', decision: event.decision,
         };
         if (this.state.jobId) message.jobId = this.state.jobId;
         this.addMessage(message);
@@ -779,6 +908,9 @@ export class StudioPanel implements UiComponent {
     for (const message of this.state.messages) {
       if (message.jobId === this.state.jobId && message.approval && !message.approval.status) {
         message.approval.status = 'expired';
+      }
+      if (message.jobId === this.state.jobId && message.decision?.status === 'pending') {
+        message.decision.status = 'expired';
       }
     }
     setText(this.connection, label);
@@ -836,7 +968,7 @@ export class StudioPanel implements UiComponent {
         },
         h('strong', { class: 'studio-message-role', text: message.role === 'user' ? 'Você' : message.role === 'assistant' ? 'Agente' : 'OmniRoute' }),
         body);
-        view = { el, body, content: '\0', approvalStatus: '\0' };
+        view = { el, body, content: '\0', approvalStatus: '\0', decisionStatus: '\0' };
         this.views.set(message.id, view);
         this.timeline.append(el);
       }
@@ -846,6 +978,15 @@ export class StudioPanel implements UiComponent {
         if (view.approvalStatus !== status) {
           view.body.replaceChildren(this.approvalCard(message));
           view.approvalStatus = status;
+        }
+      } else if (message.decision) {
+        // Não reconstrói o cartão a cada token: preserva foco e observação em edição.
+        const status = JSON.stringify([
+          message.decision.status, message.decision.choice, message.jobId,
+        ]);
+        if (view.decisionStatus !== status) {
+          view.body.replaceChildren(this.decisionCard(message));
+          view.decisionStatus = status;
         }
       } else if (message.result) {
         if (view.content === '\0') {
@@ -939,6 +1080,126 @@ export class StudioPanel implements UiComponent {
     };
     actions.append(approve, reject, feedback);
     card.append(actions);
+    return card;
+  }
+
+  private decisionCard(message: Message): HTMLElement {
+    const decision = message.decision;
+    if (!decision) return h('div');
+    const state = this.state;
+    const card = h('section', {
+      class: 'studio-decision',
+      attrs: { 'aria-label': 'Decisão necessária' },
+    },
+    h('strong', { text: 'Decidir' }),
+    h('p', { text: decision.question }));
+
+    const status = h('p', { class: 'studio-decision-status', role: 'status' });
+    const feedback = h('p', { class: 'studio-error', role: 'status' });
+    const note = h('input', {
+      attrs: { type: 'text', maxlength: 500, placeholder: 'Contexto adicional, se necessário' },
+    });
+    note.value = decision.note ?? '';
+    note.addEventListener('input', () => {
+      if (decision.status !== 'pending' || this.respondingDecisions.has(decision)) return;
+      decision.note = note.value.slice(0, 500);
+      this.save(state);
+    });
+
+    const buttons: HTMLButtonElement[] = [];
+    const options = h('div', { class: 'studio-decision-options' });
+    const update = (): void => {
+      const busy = this.respondingDecisions.has(decision);
+      const disabled = busy || decision.status !== 'pending' || !message.jobId;
+      for (const [index, button] of buttons.entries()) {
+        button.disabled = disabled;
+        button.classList.toggle('is-selected', decision.status === 'answered' && decision.choice === index);
+      }
+      note.disabled = disabled;
+      setAttr(card, 'aria-busy', String(busy));
+      setText(status, decision.status === 'answered'
+        ? `Respondido · ${decision.options[decision.choice ?? -1] ?? 'Opção não informada'}`
+        : decision.status === 'expired'
+          ? 'Expirado ou encerrado'
+          : busy
+            ? 'Enviando resposta…'
+            : message.jobId ? 'Aguardando sua decisão' : 'Aguardando identificador da tarefa');
+    };
+
+    const respond = async (choice: number): Promise<void> => {
+      const jobId = message.jobId;
+      if (!jobId || decision.status !== 'pending' || this.respondingDecisions.has(decision)) return;
+      const observation = note.value.slice(0, 500).trim();
+      decision.note = observation;
+      this.respondingDecisions.add(decision);
+      setText(feedback, '');
+      update();
+      this.save(state);
+
+      try {
+        const response = await fetch(
+          `${API}/jobs/${encodeURIComponent(jobId)}/decisions/${encodeURIComponent(decision.id)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ choice, ...(observation ? { note: observation } : {}) }),
+          },
+        );
+        if (!response.ok) {
+          let detail = '';
+          try {
+            const text = await response.text();
+            try {
+              const data = obj(JSON.parse(text) as unknown);
+              detail = str(data.error) || str(obj(data.error).message) || str(data.message);
+            } catch {
+              detail = text.trim();
+            }
+          } catch {
+            // O status HTTP continua disponível mesmo se o corpo não puder ser lido.
+          }
+          if (response.status === 404 || response.status === 410) decision.status = 'expired';
+          throw new Error(
+            `Falha ao responder decisão (HTTP ${response.status}).${detail ? ` ${detail}` : ''}`,
+          );
+        }
+
+        decision.choice = choice;
+        decision.status = 'answered';
+      } catch (error) {
+        setText(feedback, errorText(error));
+      } finally {
+        this.respondingDecisions.delete(decision);
+        this.save(state);
+        update();
+        if (this.state === state) {
+          this.syncMessages();
+          // O término da tarefa pode ter reconstruído o cartão durante o POST.
+          const currentFeedback = this.views.get(message.id)?.body.querySelector('.studio-decision-feedback');
+          if (currentFeedback) setText(currentFeedback, feedback.textContent ?? '');
+        }
+      }
+    };
+
+    for (const [index, option] of decision.options.entries()) {
+      const button = action(option, () => void respond(index));
+      if (index === decision.recommended) {
+        button.classList.add('is-recommended');
+        button.append(h('span', { class: 'studio-decision-recommended', text: 'Recomendado' }));
+      }
+      buttons.push(button);
+      options.append(button);
+    }
+    feedback.classList.add('studio-decision-feedback');
+    card.append(
+      options,
+      h('label', { class: 'studio-decision-note' },
+        h('span', { text: 'Observação opcional (até 500 caracteres)' }), note,
+      ),
+      status,
+      feedback,
+    );
+    update();
     return card;
   }
 

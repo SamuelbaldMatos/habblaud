@@ -63,7 +63,8 @@
 
 .studio-overlay button,
 .studio-overlay select,
-.studio-overlay textarea {
+.studio-overlay textarea,
+.studio-overlay input {
   max-width: 100%;
   border: 1px solid var(--ui-line-strong);
   border-radius: 2px;
@@ -85,7 +86,8 @@
 }
 
 .studio-overlay button:disabled,
-.studio-overlay select:disabled {
+.studio-overlay select:disabled,
+.studio-overlay input:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -175,11 +177,28 @@
 .studio-conversation-meta {
   display: flex;
   flex: 0 0 auto;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
   padding-bottom: 9px;
   border-bottom: 1px solid var(--ui-line);
+}
+
+.studio-manager {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--ui-muted);
+}
+
+.studio-manager select {
+  width: auto;
+  min-width: 0;
+  margin-bottom: 0;
 }
 
 .studio-muted {
@@ -336,13 +355,15 @@
   flex: 1 1 160px;
 }
 
-.studio-approval {
+.studio-approval,
+.studio-decision {
   padding: 12px;
   border: 1px solid var(--lv-warn);
   box-shadow: 3px 3px 0 var(--ui-line);
 }
 
-.studio-approval > strong {
+.studio-approval > strong,
+.studio-decision > strong {
   color: var(--lv-warn);
 }
 
@@ -350,6 +371,68 @@
   display: block;
   margin: 8px 0;
   overflow-wrap: anywhere;
+}
+
+.studio-decision-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.studio-decision-options button {
+  width: 100%;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.studio-decision-options button.is-recommended {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+.studio-decision-options button.is-selected {
+  border-color: var(--ui-accent);
+  border-left-width: 3px;
+  color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+  opacity: 1;
+}
+
+.studio-decision-recommended {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid var(--ui-accent);
+  color: var(--ui-accent);
+  font-size: 11px;
+}
+
+.studio-decision-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--ui-muted);
+}
+
+.studio-decision-note input {
+  width: 100%;
+  min-height: 38px;
+  padding: 7px;
+}
+
+.studio-decision-note input::placeholder {
+  color: var(--ui-muted);
+}
+
+.studio-decision-status {
+  color: var(--ui-muted);
+}
+
+.studio-decision-feedback:empty {
+  display: none;
 }
 
 .studio-versions {

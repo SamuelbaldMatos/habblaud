@@ -61,6 +61,8 @@ import { WorldViewer } from './world/viewer';
 import { ThemeStore } from './theme';
 import { VscodeActivitySource } from './sources/vscode';
 import { DelegationSource } from './sources/delegations';
+import { JARVIS_ROOM_CWD, JarvisSource } from './sources/jarvis';
+import { normalizeCwd } from './model/rooms';
 import { CodexWatcher } from './sources/codex-watcher';
 import { createOmnirouteHandler } from './http/omniroute';
 
@@ -96,6 +98,7 @@ const late: {
   watcher?: ClaudeWatcher;
   vscode?: VscodeActivitySource;
   delegations?: DelegationSource;
+  jarvis?: JarvisSource;
   codex?: CodexWatcher;
 } = {};
 // Versão nova: consulta a release mais recente no GitHub a cada 6 h (HABBLAUD_UPDATE_CHECK=0 desliga).
@@ -143,6 +146,7 @@ const office = new Office({
     ...(late.agents?.sources() ?? []),
     ...(late.vscode?.sources() ?? []),
     ...(late.delegations?.sources() ?? []),
+    ...(late.jarvis?.sources() ?? []),
   ],
   accountName: (id) => accounts.find(id)?.detected.name,
   terminal: config.terminal,
@@ -169,6 +173,9 @@ late.office = office;
 late.agents = agents;
 late.vscode = vscode;
 late.delegations = delegations;
+// Jarvis, o gerente fixo da sala Diretoria (acompanha as tarefas do estúdio de código).
+const jarvis = new JarvisSource({ office, names, roomId: normalizeCwd(JARVIS_ROOM_CWD) });
+late.jarvis = jarvis;
 // Página que pode responder pelo escritório: Host local na porta local; na remota, só com permissions liberado.
 const hub = new Hub(office, {
   canAnswer: (req) => (isRemoteRequest(req) ? !!config.remote?.allow.has('permissions') : isLoopbackHost(req.headers.host)),
@@ -347,6 +354,7 @@ if (config.demo) office.setDemo(true);
 void agents.start();
 vscode.start();
 delegations.start();
+jarvis.start();
 accounts.start();
 hub.start();
 if (timeline) {
@@ -413,6 +421,7 @@ const api = createApiHandler({
         roots: (process.env.HABBLAUD_AGENT_ROOTS ?? '').split(',').filter((r) => r.trim()),
         contextDir: process.env.HABBLAUD_CONTEXT_DIR?.trim() || undefined,
         onOmniUsage: (byEmail) => accounts.applyOmniroute(byEmail),
+        onJobEvent: (job, ev) => jarvis.onJob({ jobId: job.id, title: job.title, type: ev.type, activity: ev.activity, model: ev.model, error: ev.error }),
         pollOmniStatus: true,
       })
     : undefined,

@@ -61,6 +61,8 @@ export interface AgentModelRequest {
   messages: Array<{ role: 'user' | 'assistant'; content: string | ModelContentBlock[] }>;
   tools?: readonly AgentToolDefinition[];
   signal: AbortSignal;
+  /** 'none' desliga o raciocínio do Qwen local (~1 s contra ~27 s, medido em 2026-10-12). */
+  reasoningEffort?: 'none';
 }
 
 export type AgentModel = (request: AgentModelRequest) => Promise<AgentModelReply>;
@@ -77,7 +79,7 @@ interface AgentToolDefinition {
 }
 
 export interface AgentStreamEvent {
-  type: 'job' | 'text' | 'model' | 'activity' | 'approval' | 'tool_result' | 'error' | 'done';
+  type: 'job' | 'text' | 'model' | 'activity' | 'approval' | 'decision' | 'tool_result' | 'error' | 'done';
   /** Ordem do evento na tarefa (1, 2, 3...): reanexar com ?after=N não duplica nada. */
   seq?: number;
   jobId?: string;
@@ -94,6 +96,8 @@ export interface AgentStreamEvent {
     newContent?: string;
   };
   result?: { tool: string; ok: boolean; message: string };
+  /** Decisão do usuário pedida pelo gerente: 2 a 4 opções, uma recomendada. */
+  decision?: { id: string; question: string; options: string[]; recommended?: number };
   error?: string;
 }
 
@@ -115,7 +119,12 @@ export interface AgentRunInput {
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
   workspace?: string;
   threadId?: string;
+  /** Gerente da tarefa: 'orquestrador' (nuvem com failover até o local) ou 'gerente-jarvis' (Qwen local primeiro). */
+  manager?: ManagerCombo;
 }
+
+export const MANAGER_COMBOS = ['orquestrador', 'gerente-jarvis'] as const;
+export type ManagerCombo = (typeof MANAGER_COMBOS)[number];
 
 /** Cartão do projeto em cache (server/http/project-context.ts), injetado no system prompt. */
 export interface ProjectContextProvider {
@@ -128,6 +137,12 @@ type Listener = (event: AgentStreamEvent) => void;
 interface PendingApproval {
   resolve: (approved: boolean) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+interface PendingDecision {
+  resolve: (choice: number | undefined, note?: string) => void;
+  timer: ReturnType<typeof setTimeout>;
+  options: string[];
 }
 
 interface AgentJob {
@@ -144,6 +159,8 @@ interface AgentJob {
   seq: number;
   listeners: Set<Listener>;
   approvals: Map<string, PendingApproval>;
+  decisions: Map<string, PendingDecision>;
+  manager: ManagerCombo;
   specialistCalls: number;
   tokensCharged: number;
   modelCalls: number;
@@ -177,6 +194,20 @@ const tools: readonly AgentToolDefinition[] = [
       type: 'object',
       properties: { title: { type: 'string' }, summary: { type: 'string' }, evidence: { type: 'string' } },
       required: ['title', 'summary', 'evidence'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ask_decision',
+    description: 'Pedir ao usuário uma DECISÃO importante (rumo, risco, custo, algo irreversível): 2 a 4 opções curtas, indicando a recomendada. Espera a escolha; nunca decida sozinho o que for importante.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'Pergunta objetiva, até 300 caracteres.' },
+        options: { type: 'array', description: '2 a 4 opções curtas.' },
+        recommended: { type: 'number', description: 'Índice (0 a 3) da opção recomendada.' },
+      },
+      required: ['question', 'options'],
       additionalProperties: false,
     },
   },
@@ -243,7 +274,7 @@ const tools: readonly AgentToolDefinition[] = [
 ];
 
 const MANAGER_SYSTEM = [
-  'Você é o orquestrador do Habblaud e o único gerente desta tarefa. Trabalhe até o fim: só pare com a entrega feita, uma pergunta objetiva ao usuário ou um bloqueio real.',
+  'Você é o gerente do Habblaud (o Jarvis, quando roda local) e o único gerente desta tarefa. Trabalhe até o fim: só pare com a entrega feita, uma pergunta objetiva ao usuário ou um bloqueio real.',
   'Divida o trabalho: delegue análises e revisões pontuais aos especialistas (consult_specialist), que rodam em outras provedoras pelo OmniRoute. Código usa codigo/codigo-pesado; revisão independente usa revisor; riscos usam revisor-seguranca; Claude fica reservado a complexo/maximo.',
   'O cartão do projeto e a memória do Cérebro abaixo são cache verificado: use-os em vez de redescobrir o projeto; leia arquivos só quando precisar do conteúdo exato. Um resumo antigo não prova o estado atual.',
   'Antes de escrever, leia o arquivo atual. Use list_files e search_text para achar caminhos em vez de adivinhar.',
@@ -253,6 +284,7 @@ const MANAGER_SYSTEM = [
   'Nunca alegue que uma escrita ou comando ocorreu antes de receber sucesso do resultado da ferramenta.',
   'Há um orçamento agregado de tokens para gerente e especialistas. Resultados marcados como truncados são parciais; não os trate como arquivos completos nem como validação integral.',
   'Peça aprovações uma ação por vez e explique o resultado esperado. Não tente contornar uma recusa.',
+  'Decisão importante (rumo do trabalho, risco, custo, algo irreversível ou ambíguo) vira ask_decision com 2 a 4 opções e a recomendada; o usuário dá a palavra final.',
 ].join('\n');
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -321,6 +353,8 @@ export class AgentRuntime {
       memory?: AgentMemory;
       context?: ProjectContextProvider;
       now?: () => number;
+      /** Cada evento de tarefa (o Jarvis do escritório acompanha por aqui). Erro do observador não afeta a tarefa. */
+      onEvent?: (job: { id: string; title: string }, event: AgentStreamEvent) => void;
     },
   ) {
     this.tokenBudget = options.maxTotalTokens ?? DEFAULT_TOKEN_BUDGET;
@@ -361,7 +395,7 @@ export class AgentRuntime {
     const job: AgentJob = {
       id, title: jobTitle(input.message), workspace, rootDir, status: 'running', startedAt: this.now(),
       controller: new AbortController(), events: [], seq: 0, listeners: new Set(listener ? [listener] : []),
-      approvals: new Map(), specialistCalls: 0, tokensCharged: 0, modelCalls: 0, estimatedCalls: 0,
+      approvals: new Map(), decisions: new Map(), manager: input.manager ?? 'orquestrador', specialistCalls: 0, tokensCharged: 0, modelCalls: 0, estimatedCalls: 0,
       toolSuccesses: 0, toolFailures: 0, learningCount: 0, writes: 0,
     };
     this.jobs.set(id, job);
@@ -413,6 +447,11 @@ export class AgentRuntime {
       pending.resolve(false);
     }
     job.approvals.clear();
+    for (const pending of job.decisions.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve(undefined);
+    }
+    job.decisions.clear();
     return true;
   }
 
@@ -430,6 +469,23 @@ export class AgentRuntime {
         job.listeners.delete(listener);
       }
     }
+    try {
+      this.options.onEvent?.({ id: job.id, title: job.title }, stamped);
+    } catch {
+      // O observador (escritório) nunca derruba a tarefa.
+    }
+  }
+
+  /** Resposta do usuário a um cartão Decidir (índice da opção, com nota opcional). */
+  decide(jobId: string, decisionId: string, choice: number, note?: string): boolean {
+    const job = this.jobs.get(jobId);
+    const pending = job?.decisions.get(decisionId);
+    if (!job || !pending || job.controller.signal.aborted) return false;
+    if (!Number.isInteger(choice) || choice < 0 || choice >= pending.options.length) return false;
+    clearTimeout(pending.timer);
+    job.decisions.delete(decisionId);
+    pending.resolve(choice, typeof note === 'string' ? note.slice(0, 500) : undefined);
+    return true;
   }
 
   private async completeOnce(job: AgentJob, request: AgentModelRequest): Promise<AgentModelReply> {
@@ -511,6 +567,30 @@ export class AgentRuntime {
     }
   }
 
+  private async askDecision(job: AgentJob, input: unknown): Promise<string> {
+    if (!isObject(input) || typeof input.question !== 'string' || !input.question.trim() || !Array.isArray(input.options)) {
+      throw new Error('Decisão exige pergunta e 2 a 4 opções.');
+    }
+    const options = input.options.filter((o): o is string => typeof o === 'string' && !!o.trim()).map((o) => o.trim().slice(0, 160));
+    if (options.length < 2 || options.length > 4) throw new Error('Decisão exige de 2 a 4 opções.');
+    const rec = input.recommended;
+    const recommended = typeof rec === 'number' && Number.isInteger(rec) && rec >= 0 && rec < options.length ? rec : undefined;
+    const id = newApprovalId();
+    const answer = new Promise<{ choice: number | undefined; note?: string }>((resolve) => {
+      const timer = setTimeout(() => {
+        job.decisions.delete(id);
+        resolve({ choice: undefined });
+      }, APPROVAL_TIMEOUT_MS);
+      job.decisions.set(id, { resolve: (choice, note) => resolve({ choice, note }), timer, options });
+    });
+    this.emit(job, { type: 'decision', decision: { id, question: input.question.trim().slice(0, 300), options, ...(recommended !== undefined ? { recommended } : {}) } });
+    const { choice, note } = await answer;
+    if (choice === undefined) throw new Error('Decisão não respondida (cancelada ou expirou em 30 min); não prossiga com nenhuma das opções.');
+    const msg = 'O usuário escolheu: "' + options[choice] + '"' + (note ? '. Observação: ' + note : '') + '.';
+    this.emit(job, { type: 'tool_result', result: { tool: 'ask_decision', ok: true, message: msg } });
+    return msg;
+  }
+
   private async consult(job: AgentJob, input: unknown): Promise<string> {
     if (!isObject(input) || typeof input.combo !== 'string' || typeof input.task !== 'string' || input.task.trim().length === 0) {
       throw new Error('Pedido ao especialista inválido.');
@@ -540,6 +620,7 @@ export class AgentRuntime {
         if (!isObject(block.input)) throw new Error('Argumentos de leitura inválidos.');
         return ok(await readWorkspaceFile(job.rootDir, block.input.path));
       }
+      if (name === 'ask_decision') return ok(await this.askDecision(job, block.input));
       if (name === 'list_files') {
         const dir = isObject(block.input) ? block.input.dir : undefined;
         return ok(await listWorkspaceFiles(job.rootDir, dir));
@@ -672,7 +753,8 @@ export class AgentRuntime {
       for (let turn = 0; turn < MAX_TURNS; turn++) {
         if (job.controller.signal.aborted) break;
         const reply = await this.complete(job, {
-          combo: 'orquestrador',
+          combo: job.manager,
+          ...(job.manager === 'gerente-jarvis' ? { reasoningEffort: 'none' as const } : {}),
           system: `${MANAGER_SYSTEM}\nWorkspace: ${job.workspace}.${context ? `\n\n${context}` : ''}`,
           messages,
           tools: jobTools,
@@ -744,6 +826,11 @@ export class AgentRuntime {
         pending.resolve(false);
       }
       job.approvals.clear();
+      for (const pending of job.decisions.values()) {
+        clearTimeout(pending.timer);
+        pending.resolve(undefined);
+      }
+      job.decisions.clear();
       job.status = job.controller.signal.aborted ? 'cancelled' : failed ? 'error' : 'done';
       job.endedAt = this.now();
       this.emit(job, { type: 'done' });

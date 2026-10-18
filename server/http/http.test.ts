@@ -450,6 +450,7 @@ describe('API HTTP do OmniRoute', () => {
     expect(sent).toMatchObject({ model: 'orquestrador', stream: false });
     expect(sent.tools.map((tool: { name: string }) => tool.name)).toEqual([
       'consult_specialist',
+      'ask_decision',
       'list_files',
       'search_text',
       'read_file',

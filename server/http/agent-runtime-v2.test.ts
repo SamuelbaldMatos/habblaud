@@ -336,3 +336,66 @@ describe('stripPlaceholder', () => {
     expect(stripPlaceholder('Texto normal (empty response) no meio')).toBe('Texto normal (empty response) no meio');
   });
 });
+
+describe('gerente e decisões', () => {
+  it('ask_decision espera a escolha do usuário e devolve a opção ao gerente', async () => {
+    const rootDir = workspace();
+    let toolResult = '';
+    const complete: AgentModel = vi.fn(async (request) => {
+      if (vi.mocked(complete).mock.calls.length === 1) {
+        return { content: [{ type: 'tool_use', id: 'd1', name: 'ask_decision', input: { question: 'Qual banco?', options: ['Postgres', 'SQLite'], recommended: 1 } }] };
+      }
+      const last = request.messages.at(-1)?.content;
+      toolResult = Array.isArray(last) ? String(last[0]?.content ?? '') : '';
+      return finalReply();
+    });
+    const runtime = new AgentRuntime({ rootDir, complete });
+    const events: AgentStreamEvent[] = [];
+    const id = runtime.start({ message: 'Escolher banco' }, (event) => events.push(event));
+    const ev = await waitForEvent(events, 'decision');
+    expect(ev.decision).toMatchObject({ question: 'Qual banco?', options: ['Postgres', 'SQLite'], recommended: 1 });
+    expect(runtime.decide(id, ev.decision!.id, 5)).toBe(false);
+    expect(runtime.decide(id, ev.decision!.id, 1, 'leve')).toBe(true);
+    await waitForDone(events);
+    expect(toolResult).toContain('"SQLite"');
+    expect(toolResult).toContain('leve');
+  });
+
+  it('decisão inválida (1 opção) volta como erro da ferramenta, sem cartão', async () => {
+    const rootDir = workspace();
+    const complete: AgentModel = vi.fn(async () => vi.mocked(complete).mock.calls.length === 1
+      ? { content: [{ type: 'tool_use', id: 'd1', name: 'ask_decision', input: { question: 'Só uma?', options: ['A'] } }] }
+      : finalReply());
+    const events: AgentStreamEvent[] = [];
+    new AgentRuntime({ rootDir, complete }).start({ message: 'x' }, (event) => events.push(event));
+    await waitForDone(events);
+    expect(events.some((e) => e.type === 'decision')).toBe(false);
+    expect(events.some((e) => e.type === 'tool_result' && e.result?.ok === false)).toBe(true);
+  });
+
+  it('o gerente Jarvis usa gerente-jarvis sem raciocínio; o padrão é o orquestrador', async () => {
+    const rootDir = workspace();
+    const complete: AgentModel = vi.fn(async () => finalReply());
+    const runtime = new AgentRuntime({ rootDir, complete });
+    const a: AgentStreamEvent[] = [];
+    runtime.start({ message: 'oi', manager: 'gerente-jarvis' }, (event) => a.push(event));
+    await waitForDone(a);
+    expect(vi.mocked(complete).mock.calls[0][0]).toMatchObject({ combo: 'gerente-jarvis', reasoningEffort: 'none' });
+    const b: AgentStreamEvent[] = [];
+    runtime.start({ message: 'oi' }, (event) => b.push(event));
+    await waitForDone(b);
+    expect(vi.mocked(complete).mock.calls[1][0].combo).toBe('orquestrador');
+    expect(vi.mocked(complete).mock.calls[1][0].reasoningEffort).toBeUndefined();
+  });
+
+  it('o observador recebe cada evento, e um observador com erro não derruba a tarefa', async () => {
+    const rootDir = workspace();
+    const seen: string[] = [];
+    const runtime = new AgentRuntime({ rootDir, complete: vi.fn(async () => finalReply()), onEvent: (_job, ev) => { seen.push(ev.type); throw new Error('falha do observador'); } });
+    const events: AgentStreamEvent[] = [];
+    runtime.start({ message: 'oi' }, (event) => events.push(event));
+    await waitForDone(events);
+    expect(seen[0]).toBe('job');
+    expect(seen.at(-1)).toBe('done');
+  });
+});

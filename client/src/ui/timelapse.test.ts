@@ -12,6 +12,7 @@ vi.mock('./drawer');
 vi.mock('./feed');
 // Fork: o chat do OmniRoute também não participa do relógio.
 vi.mock('./chat');
+vi.mock('./studio');
 vi.mock('./help');
 vi.mock('./history');
 vi.mock('./hovertip');

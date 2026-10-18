@@ -51,6 +51,9 @@ import type { DecorTheme } from '../world/api';
 import { tr } from '../../../shared/i18n';
 import { StudioPanel } from './studio';
 
+/** Id fixo do Jarvis no escritório (server/sources/jarvis.ts). */
+const JARVIS_AGENT_ID = 'jarvis:gerente';
+
 /** Relógio dos tempos relativos ("há 5 s"). */
 const CLOCK_MS = 5_000;
 /** Relógio do cronômetro dos shells ("12:31") e do prazo dos pedidos do Codex, ligado só enquanto há um dos dois. */
@@ -385,6 +388,12 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   store.on('connection', () => invalidate());
   onAccessChange(() => invalidate());
   world.onSelect((sel) => {
+    // Jarvis, o gerente: clique nele abre o estúdio de código com ele de gerente (não a gaveta de detalhes).
+    if (sel?.type === 'agent' && sel.id === JARVIS_AGENT_ID) {
+      studio.openJarvis();
+      world.select(null);
+      return;
+    }
     const prev = selection;
     selection = sel;
     // Clique no canvas (ou agente que saiu): a gaveta espera a janela do duplo clique antes de mexer na câmera.

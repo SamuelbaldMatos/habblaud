@@ -8,7 +8,7 @@ import type { Recipe } from './recipes';
 import { join } from 'node:path';
 import { HttpError, readJson, sendJson } from './app';
 import { isLoopbackAddress, isLoopbackHost } from './guard';
-import { AgentRuntime, type AgentModel, type AgentModelReply, type AgentStreamEvent } from './agent-runtime';
+import { AgentRuntime, MANAGER_COMBOS, type AgentModel, type AgentModelReply, type AgentStreamEvent, type ManagerCombo } from './agent-runtime';
 import { createAgentMemory } from './agent-memory';
 import { ProjectContextCache } from './project-context';
 import { discoverWorkspaces } from './workspaces';
@@ -36,6 +36,8 @@ interface AgentRunRequest {
   workspace?: string;
   /** Conversa do estúdio: a memória do Cérebro é consultada uma vez por conversa. */
   threadId?: string;
+  /** Gerente: orquestrador (nuvem) ou gerente-jarvis (Qwen local primeiro). */
+  manager?: ManagerCombo;
 }
 
 const ID_FIELD = /^[A-Za-z0-9._-]{1,64}$/;
@@ -117,11 +119,15 @@ export function localOmnirouteEndpoint(url: string, inDocker: boolean): URL {
 
 function parseAgentRunRequest(value: unknown): AgentRunRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'corpo inválido');
-  const request = value as { message?: unknown; messages?: unknown; workspace?: unknown; threadId?: unknown };
+  const request = value as { message?: unknown; messages?: unknown; workspace?: unknown; threadId?: unknown; manager?: unknown };
   if (typeof request.message !== 'string' || !request.message.trim() || request.message.length > MAX_MESSAGE_LENGTH) {
     throw new HttpError(400, 'mensagem inválida');
   }
-  const extra: Pick<AgentRunRequest, 'workspace' | 'threadId'> = {};
+  const extra: Pick<AgentRunRequest, 'workspace' | 'threadId' | 'manager'> = {};
+  if (request.manager !== undefined) {
+    if (typeof request.manager !== 'string' || !(MANAGER_COMBOS as readonly string[]).includes(request.manager)) throw new HttpError(400, 'gerente inválido');
+    extra.manager = request.manager as ManagerCombo;
+  }
   for (const key of ['workspace', 'threadId'] as const) {
     const v = request[key];
     if (v === undefined) continue;
@@ -183,6 +189,8 @@ export function createOmnirouteHandler(opts: {
   onOmniUsage?: (byEmail: ReadonlyMap<string, AccountUsage>) => void;
   /** Liga a leitura periódica do estado do OmniRoute (o servidor real liga; os testes não). */
   pollOmniStatus?: boolean;
+  /** Cada evento das tarefas do estúdio (o Jarvis do escritório acompanha). */
+  onJobEvent?: (job: { id: string; title: string }, event: AgentStreamEvent) => void;
 }): (req: IncomingMessage, res: ServerResponse, path: string) => boolean {
   // Estado e cotas do OmniRoute (cache de 60 s, renovado a cada 2 min): alimenta o painel e o uso das contas.
   const omniStatus = new OmniStatusService({
@@ -232,6 +240,7 @@ export function createOmnirouteHandler(opts: {
           system: request.system,
           messages: request.messages,
           ...(request.tools ? { tools: request.tools } : {}),
+          ...(request.reasoningEffort ? { reasoning_effort: request.reasoningEffort } : {}),
         }),
         // Sem streaming o corte de 110 s do OmniRoute não vale; 600 s dá tempo ao modelo local na reserva.
         signal: AbortSignal.any([request.signal, AbortSignal.timeout(600_000)]),
@@ -269,6 +278,7 @@ export function createOmnirouteHandler(opts: {
     workspaces, complete, memory,
     context: { get: (ws, dir) => projectContext.get(ws, dir), render: (card) => projectContext.render(card) },
     maxTotalTokens: process.env.HABBLAUD_AGENT_TOKEN_BUDGET ? Number(process.env.HABBLAUD_AGENT_TOKEN_BUDGET) : undefined,
+    onEvent: opts.onJobEvent,
   }) : undefined;
 
   return (req, res, path) => {
@@ -599,6 +609,33 @@ export function createOmnirouteHandler(opts: {
           if (!runtime || (decision !== 'approve' && decision !== 'reject')) throw new HttpError(400, 'decisão inválida');
           const ok = runtime.approve(approvalMatch[1], approvalMatch[2], decision);
           if (!ok) throw new HttpError(404, 'aprovação inexistente, expirada ou já respondida');
+          sendJson(res, 200, { ok: true });
+        })
+        .catch((error) => {
+          if (error instanceof HttpError) sendJson(res, error.status, { error: error.message });
+          else sendJson(res, 500, { error: (error as Error).message || 'erro interno' });
+        });
+      return true;
+    }
+
+    const decisionMatch = /^\/api\/omniroute\/jobs\/([0-9a-f-]{36})\/decisions\/([A-Za-z0-9_-]{32})$/.exec(path);
+    if (decisionMatch) {
+      if (method !== 'POST') {
+        res.setHeader('Allow', 'POST');
+        sendJson(res, 405, { error: 'método não permitido' });
+        return true;
+      }
+      if (!localRequest(req, opts)) {
+        req.resume();
+        sendJson(res, 403, { error: 'decisões só podem ser respondidas localmente' });
+        return true;
+      }
+      readJson(req)
+        .then((body) => {
+          const b = (body ?? {}) as { choice?: unknown; note?: unknown };
+          if (!runtime || typeof b.choice !== 'number') throw new HttpError(400, 'escolha inválida');
+          const ok = runtime.decide(decisionMatch[1], decisionMatch[2], b.choice, typeof b.note === 'string' ? b.note : undefined);
+          if (!ok) throw new HttpError(404, 'decisão inexistente, expirada, já respondida ou opção inválida');
           sendJson(res, 200, { ok: true });
         })
         .catch((error) => {
