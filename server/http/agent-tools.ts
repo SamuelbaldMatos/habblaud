@@ -93,6 +93,20 @@ export async function readWorkspaceFile(rootDir: string, relativePath: unknown):
   return data.toString('utf8');
 }
 
+/** Numera as linhas para o modelo citar a linha certa ("12| texto"); o arquivo em si não muda. */
+export function numberLines(text: string): string {
+  const lines = text.split('\n');
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  const width = String(lines.length).length;
+  return lines.map((line, i) => `${String(i + 1).padStart(width, ' ')}| ${line}`).join('\n');
+}
+
+/** Conteúdo copiado da leitura numerada (toda linha com "N| "): sinal de que o modelo esqueceu de tirar os números. */
+export function looksLineNumbered(text: string): boolean {
+  const lines = text.split('\n').filter((line) => line.trim());
+  return lines.length >= 2 && lines.every((line) => /^\s*\d+\| /.test(line));
+}
+
 export interface PreparedWrite {
   path: string;
   relativePath: string;

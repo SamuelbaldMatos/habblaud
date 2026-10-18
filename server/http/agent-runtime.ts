@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   applyWorkspaceWrite, APPROVED_CHECKS, availablePackageScripts, listWorkspaceFiles, newApprovalId, PACKAGE_SCRIPTS,
-  prepareWorkspaceWrite, readWorkspaceFile, runApprovedCheck, runPackageScript, searchWorkspaceText,
+  looksLineNumbered, numberLines, prepareWorkspaceWrite, readWorkspaceFile, runApprovedCheck, runPackageScript, searchWorkspaceText,
 } from './agent-tools';
 import type { ApprovedCheck } from './agent-tools';
 import type { AgentMemory } from './agent-memory';
@@ -14,6 +14,10 @@ const MAX_JOBS = 3;
 const APPROVAL_TIMEOUT_MS = 30 * 60_000;
 const MAX_SPECIALIST_TASK = 8_000;
 const MAX_SESSION_PROMPT = MAX_SESSION_TASK;
+/** Contexto anexado (cartão + memória) quando o gerente é o Jarvis local: o Qwen relê tudo a cada etapa. */
+const JARVIS_CONTEXT_MAX = 3_000;
+/** Acima disto (bytes de instruções + conversa), a etapa vai ao orquestrador: o Qwen passaria do corte de 300 s. */
+const JARVIS_LOCAL_MAX_BYTES = 16_000;
 const DEFAULT_TOKEN_BUDGET = 120_000;
 const MAX_OUTPUT_TOKENS = 4096;
 const MAX_TOOL_CALLS_PER_TURN = 8;
@@ -248,7 +252,7 @@ const tools: readonly AgentToolDefinition[] = [
   },
   {
     name: 'read_file',
-    description: 'Ler um arquivo de texto existente no workspace, usando caminho relativo.',
+    description: 'Ler um arquivo de texto existente no workspace, usando caminho relativo. Cada linha vem numerada ("12| texto"): cite esses números; ao propor escrita, NÃO inclua os números.',
     input_schema: {
       type: 'object',
       properties: { path: { type: 'string' } },
@@ -668,7 +672,7 @@ export class AgentRuntime {
       if (name === 'start_agent_session') return ok(await this.startAgentSession(job, block.input));
       if (name === 'read_file') {
         if (!isObject(block.input)) throw new Error('Argumentos de leitura inválidos.');
-        return ok(await readWorkspaceFile(job.rootDir, block.input.path));
+        return ok(numberLines(await readWorkspaceFile(job.rootDir, block.input.path)));
       }
       if (name === 'ask_decision') return ok(await this.askDecision(job, block.input));
       if (name === 'list_files') {
@@ -706,6 +710,9 @@ export class AgentRuntime {
       }
       if (name === 'propose_file_write') {
         if (!isObject(block.input)) throw new Error('Argumentos de escrita inválidos.');
+        if (typeof block.input.content === 'string' && looksLineNumbered(block.input.content)) {
+          throw new Error('O conteúdo veio com os números de linha da leitura ("12| "). Reenvie o arquivo sem eles.');
+        }
         const write = await prepareWorkspaceWrite(job.rootDir, block.input.path, block.input.content);
         const approved = await this.waitForApproval(job, {
           id: '',
@@ -791,7 +798,10 @@ export class AgentRuntime {
     let outcome = 'incompleta';
     let failed = false;
     try {
-      const context = await this.prepareContext(job, input);
+      const fullContext = await this.prepareContext(job, input);
+      const context = job.manager === 'gerente-jarvis' && fullContext.length > JARVIS_CONTEXT_MAX
+        ? `${fullContext.slice(0, JARVIS_CONTEXT_MAX)}\n[Contexto resumido para o Jarvis local; leia os arquivos quando precisar do detalhe.]`
+        : fullContext;
       const messages: AgentModelRequest['messages'] = (input.messages ?? []).slice(-10).map((message) => ({
         role: message.role,
         content: message.content.slice(0, 24_000),
@@ -804,10 +814,16 @@ export class AgentRuntime {
       let completed = false;
       for (let turn = 0; turn < MAX_TURNS; turn++) {
         if (job.controller.signal.aborted) break;
+        const system = `${MANAGER_SYSTEM}\nWorkspace: ${job.workspace}.${context ? `\n\n${context}` : ''}`;
+        // Jarvis local fica com conversa curta e voz; etapa com muito contexto (arquivos lidos) vai à nuvem.
+        const heavy = job.manager === 'gerente-jarvis'
+          && Buffer.byteLength(system + JSON.stringify(messages), 'utf8') > JARVIS_LOCAL_MAX_BYTES;
+        if (heavy) this.emit(job, { type: 'activity', activity: 'Contexto grande para o Jarvis local: esta etapa vai ao orquestrador (nuvem).' });
+        const combo = heavy ? 'orquestrador' : job.manager;
         const reply = await this.complete(job, {
-          combo: job.manager,
-          ...(job.manager === 'gerente-jarvis' ? { reasoningEffort: 'none' as const } : {}),
-          system: `${MANAGER_SYSTEM}\nWorkspace: ${job.workspace}.${context ? `\n\n${context}` : ''}`,
+          combo,
+          ...(combo === 'gerente-jarvis' ? { reasoningEffort: 'none' as const } : {}),
+          system,
           messages,
           tools: jobTools,
           signal: job.controller.signal,

@@ -399,3 +399,57 @@ describe('gerente e decisões', () => {
     expect(seen.at(-1)).toBe('done');
   });
 });
+
+describe('leitura numerada e Jarvis com contexto grande', () => {
+  it('read_file devolve as linhas numeradas, e a escrita com os números copiados é recusada sem pedir aprovação', async () => {
+    const rootDir = workspace();
+    writeFileSync(join(rootDir, 'a.ts'), 'const a = 1;\nconst b = 2;\n');
+    const complete: AgentModel = vi.fn()
+      .mockResolvedValueOnce(toolReply('read_file', { path: 'a.ts' }))
+      .mockResolvedValueOnce(toolReply('propose_file_write', { path: 'a.ts', content: '1| const a = 1;\n2| const b = 3;\n' }))
+      .mockResolvedValueOnce(finalReply());
+    const runtime = new AgentRuntime({ rootDir, complete });
+    const events: AgentStreamEvent[] = [];
+    runtime.start({ message: 'troque b' }, (event) => events.push(event));
+    await waitForDone(events);
+    const second = vi.mocked(complete).mock.calls[2][0].messages.at(-1)!.content as Array<{ content: string; is_error?: boolean }>;
+    expect(JSON.stringify(vi.mocked(complete).mock.calls[1][0].messages)).toContain('1| const a = 1;');
+    expect(second[0].is_error).toBe(true);
+    expect(second[0].content).toContain('números de linha');
+    expect(events.some((e) => e.type === 'approval')).toBe(false);
+    expect(readFileSync(join(rootDir, 'a.ts'), 'utf8')).toBe('const a = 1;\nconst b = 2;\n');
+  });
+
+  it('com o Jarvis, a etapa leve fica local e a pesada vai ao orquestrador', async () => {
+    const rootDir = workspace();
+    writeFileSync(join(rootDir, 'grande.ts'), 'x'.repeat(20_000));
+    const complete: AgentModel = vi.fn()
+      .mockResolvedValueOnce(toolReply('read_file', { path: 'grande.ts' }))
+      .mockResolvedValueOnce(finalReply());
+    const runtime = new AgentRuntime({ rootDir, complete });
+    const events: AgentStreamEvent[] = [];
+    runtime.start({ message: 'leia', manager: 'gerente-jarvis' }, (event) => events.push(event));
+    await waitForDone(events);
+    expect(vi.mocked(complete).mock.calls[0][0]).toMatchObject({ combo: 'gerente-jarvis', reasoningEffort: 'none' });
+    expect(vi.mocked(complete).mock.calls[1][0].combo).toBe('orquestrador');
+    expect(vi.mocked(complete).mock.calls[1][0].reasoningEffort).toBeUndefined();
+    expect(events.some((e) => e.type === 'activity' && e.activity?.includes('vai ao orquestrador'))).toBe(true);
+  });
+
+  it('o Jarvis recebe o contexto anexado resumido; o orquestrador recebe inteiro', async () => {
+    const rootDir = workspace();
+    const memory = { prepare: vi.fn(async () => 'm'.repeat(9_000)), record: vi.fn(async () => null) } as unknown as AgentMemory;
+    const complete: AgentModel = vi.fn(async () => finalReply());
+    const runtime = new AgentRuntime({ rootDir, complete, memory });
+    const a: AgentStreamEvent[] = [];
+    runtime.start({ message: 'oi', manager: 'gerente-jarvis', threadId: 't1' }, (event) => a.push(event));
+    await waitForDone(a);
+    const b: AgentStreamEvent[] = [];
+    runtime.start({ message: 'oi', threadId: 't2' }, (event) => b.push(event));
+    await waitForDone(b);
+    const [jarvis, nuvem] = vi.mocked(complete).mock.calls.map((c) => c[0].system);
+    expect(jarvis).toContain('Contexto resumido para o Jarvis local');
+    expect(jarvis.length).toBeLessThan(nuvem.length);
+    expect(nuvem).toContain('m'.repeat(9_000));
+  });
+});
