@@ -145,11 +145,21 @@ export function folderProblem(folder: string, stat: (p: string) => { isDirectory
 }
 
 /** `open`/`xdg-open`/`start` sem shell. */
+/**
+ * Comando que abre o link no sistema. No Windows, `cmd /c start` cortava o link no primeiro `&` (o `q=` do pedido
+ * virava outro comando); o rundll32 entrega o link inteiro ao manipulador do protocolo, sem passar pelo cmd.
+ */
+export function openerCommand(platform: NodeJS.Platform, url: string): [string, string[]] {
+  if (platform === 'darwin') return ['open', [url]];
+  if (platform === 'win32') return ['rundll32', ['url.dll,FileProtocolHandler', url]];
+  return ['xdg-open', [url]];
+}
+
 export function createOpener(platform: NodeJS.Platform = process.platform, timeoutMs = OPEN_TIMEOUT_MS): Opener {
-  const [bin, pre] = platform === 'darwin' ? ['open', []] : platform === 'win32' ? ['cmd', ['/c', 'start', '""']] : ['xdg-open', []];
   return (url) =>
     new Promise((ok) => {
-      execFile(bin, [...pre, url], { timeout: timeoutMs, windowsHide: true, encoding: 'utf8' }, (err, _out, stderr) => {
+      const [bin, args] = openerCommand(platform, url);
+      execFile(bin, args, { timeout: timeoutMs, windowsHide: true, encoding: 'utf8' }, (err, _out, stderr) => {
         if (!err) return ok({ ok: true });
         const line = (stderr || err.message || '').split('\n').find((l) => l.trim()) ?? tr('falhou');
         ok({ ok: false, error: `${bin}: ${line.trim()}`.slice(0, ERROR_MAX) });

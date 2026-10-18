@@ -8,6 +8,7 @@ import {
   folderProblem,
   HOST_PRESENCE_MS,
   launch,
+  openerCommand,
   parseSpawn,
   QUEUED_TIMEOUT_MS,
   SENT_TIMEOUT_MS,
@@ -212,5 +213,14 @@ describe('novo agente em segundo plano (claude --bg)', () => {
     expect(d.get('d1')).toMatchObject({ status: 'opened', how: 'cli' });
     expect(d.get('d2')).toMatchObject({ status: 'opened', how: 'app', note: 'pasta nova' });
     expect(d.get('d3')).toMatchObject({ status: 'opened', how: 'app' });
+  });
+});
+
+describe('abrir o link do app (fork)', () => {
+  it('no Windows o link vai inteiro ao rundll32, sem o cmd cortar no &', () => {
+    const url = 'claude://code/new?folder=C%3A%5Cx&q=oi%20%26%20tchau';
+    expect(openerCommand('win32', url)).toEqual(['rundll32', ['url.dll,FileProtocolHandler', url]]);
+    expect(openerCommand('darwin', url)).toEqual(['open', [url]]);
+    expect(openerCommand('linux', url)).toEqual(['xdg-open', [url]]);
   });
 });
