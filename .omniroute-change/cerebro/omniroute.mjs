@@ -2,14 +2,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export function configuracao() {
-  const profile = process.env.CEREBRO_OMNI_PROFILE || path.join(os.homedir(), '.claude/profiles/omniroute/settings.json');
+export function configuracao(runtime = process.env) {
+  const profile = runtime.CEREBRO_OMNI_PROFILE || path.join(os.homedir(), '.claude/profiles/omniroute/settings.json');
   let env = {};
   try { env = JSON.parse(fs.readFileSync(profile, 'utf8')).env || {}; } catch {}
-  const url = new URL(process.env.CEREBRO_OMNI_URL || env.ANTHROPIC_BASE_URL || 'http://127.0.0.1:20128');
-  if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || url.protocol !== 'http:' || url.username || url.password)
+  const url = new URL(runtime.CEREBRO_OMNI_URL || runtime.OMNIROUTE_URL || env.ANTHROPIC_BASE_URL || 'http://127.0.0.1:20128');
+  const localHost = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+    || (runtime.HABBLAUD_IN_DOCKER === '1' && url.hostname === 'host.docker.internal');
+  if (!localHost || url.protocol !== 'http:' || url.username || url.password)
     throw new Error('OmniRoute deve usar HTTP local, sem credenciais na URL.');
-  return { url: url.origin, token: process.env.CEREBRO_OMNI_TOKEN || env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY };
+  return { url: url.origin, token: runtime.CEREBRO_OMNI_TOKEN || runtime.OMNIROUTE_TOKEN || env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY };
 }
 
 export async function estadoOmni() {
@@ -32,6 +34,7 @@ export async function* lerStream(body) {
     if (!payload || payload === '[DONE]') return;
     const data = JSON.parse(payload);
     if (data.type === 'error' || data.error) throw new Error('OmniRoute retornou erro durante a geração. Verifique o gateway.');
+    if (data.delta?.stop_reason === 'max_tokens') throw new Error('Resposta parcial: limite de saída atingido.');
     if (data.type === 'message_stop') complete = true;
     if (data.type === 'content_block_delta' && typeof data.delta?.text === 'string') return data.delta.text;
   }

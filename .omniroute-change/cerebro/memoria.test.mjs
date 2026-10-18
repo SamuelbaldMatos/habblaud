@@ -93,6 +93,13 @@ test('the same id with changed content fails without overwriting knowledge', asy
   assert.equal(fs.readFileSync(file, 'utf8'), before);
 });
 
+test('handoff records unfinished work and unknown types are refused', async t => {
+  const { vault } = fixture(t);
+  const saved = await registrarMemoria(vault, record({ id: 'claude/session-three/handoff', tipo: 'handoff', titulo: 'Handoff da migração de cache', resumo: 'Objetivo: migrar o cache. Feito: leitura. Restante: escrita. Evidência: teste de leitura passou; escrita não executada.' }));
+  assert.match(fs.readFileSync(path.join(vault, saved.nota), 'utf8'), /^type: handoff$/m);
+  await assert.rejects(async () => registrarMemoria(vault, record({ id: 'claude/session-three/x', tipo: 'palpite' })), /Tipo inválido/);
+});
+
 test('project filtering keeps matching knowledge from other projects out', async t => {
   const { vault } = fixture(t);
   await registrarMemoria(vault, record());

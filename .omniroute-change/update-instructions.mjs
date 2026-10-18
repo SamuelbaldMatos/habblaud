@@ -128,7 +128,7 @@ transfere o comando: o gerente GPT integra a recomendação e decide. Backup ant
 brain = replaceRequired(
   brain,
   '- Cota Claude reservada: até o orquestrador usa primeiro o Claude servido pela cota do Google (Antigravity).',
-  '- Cota Claude reservada: Claude é usado apenas nos combos de consulta difícil/crítica (`complexo`, `maximo` e `seguranca`); o comando cotidiano fica com GPT.',
+  '- Cota Claude reservada: Claude é usado apenas nos combos de consulta difícil/crítica (`complexo`, `maximo` e `revisor-seguranca`); o comando cotidiano fica com GPT.',
   'nota do cérebro (decisão)',
 );
 writeFileSync(brainPath, brain, 'utf8');

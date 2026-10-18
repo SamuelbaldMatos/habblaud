@@ -51,11 +51,15 @@ export function buscarMemoria(root, consulta, projeto = '') {
   return result.sort((a, b) => b.score - a.score || a.nota.localeCompare(b.nota)).slice(0, 8);
 }
 
+// handoff: trabalho inacabado para outra sessão retomar. É contexto, não prova:
+// quem retoma confere arquivos, git e verificações antes de seguir.
+export const TIPOS = ['decisao', 'aprendizado', 'entrega', 'handoff'];
+
 export function registrarMemoria(root, args) {
   const id = texto(args.id, 'id', 200), titulo = texto(args.titulo, 'titulo', 160);
   const resumo = texto(args.resumo, 'resumo', 12000), origem = texto(args.origem, 'origem', 100);
   const projeto = texto(args.projeto, 'projeto', 200), tipo = args.tipo || 'aprendizado';
-  if (!['decisao', 'aprendizado', 'entrega'].includes(tipo)) throw new Error('Tipo inválido.');
+  if (!TIPOS.includes(tipo)) throw new Error('Tipo inválido.');
   if (!Array.isArray(args.evidencias) || !args.evidencias.length || args.evidencias.length > 15) throw new Error('Informe de 1 a 15 evidências verificáveis.');
   const evidencias = args.evidencias.map(e => texto(e, 'evidência', 1000));
   root = fs.realpathSync(root);

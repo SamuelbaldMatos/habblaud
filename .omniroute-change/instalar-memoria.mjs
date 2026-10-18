@@ -15,7 +15,8 @@ function block(file, content) {
   const section = `${begin}\n${content}\n${end}`;
   const start = old.indexOf(begin), finish = old.indexOf(end);
   if (start >= 0 && finish < start) throw new Error('Bloco incompleto em ' + file);
-  const generated = old.indexOf('<!-- cerebro-links -->');
+  // só o marcador sozinho na linha: uma menção em texto (ex.: CLAUDE.md) partia a frase ao meio
+  const generated = old.search(/^<!-- cerebro-links -->[ \t]*$/m);
   changes.set(file, start >= 0 ? old.slice(0, start) + section + old.slice(finish + end.length)
     : generated >= 0 ? old.slice(0, generated).trimEnd() + '\n\n' + section + '\n\n' + old.slice(generated)
     : old.trimEnd() + '\n\n' + section + '\n');
@@ -41,10 +42,10 @@ json(vscode + '/settings.json', cfg => {
 });
 const instruction = vscode + '/instructions/cerebro-compartilhado.instructions.md';
 changes.set(instruction, '---\nname: "Cérebro compartilhado"\ndescription: "Memória consolidada de projetos: consultar antes, registrar aprendizado verificado depois, em toda IA."\napplyTo: "**"\n---\n\n' + protocol);
-for (const name of ['omniroute', 'direcionador', 'pesquisador', 'executor', 'revisor', 'seguranca']) {
+for (const name of ['coordenador', 'aprimorador', 'pesquisador', 'executor', 'revisor', 'revisor-seguranca']) {
   const file = vscode + '/agents/' + name + '.agent.md';
   if (!fs.existsSync(file)) throw new Error('Agente esperado ausente: ' + file);
-  const toolNames = name === 'omniroute' ? ['cerebro/*'] : ['cerebro/cerebro_buscar', 'cerebro/cerebro_ler_nota', 'cerebro/cerebro_rotear'];
+  const toolNames = name === 'coordenador' ? ['cerebro/*'] : ['cerebro/cerebro_buscar', 'cerebro/cerebro_ler_nota', 'cerebro/cerebro_rotear'];
   let body = read(file).replace(/^tools:\s*\[([^\]]*)\]/m, (line, list) => `tools: [${list}${toolNames.filter(n => !list.includes(n)).map(n => ', "' + n + '"').join('')}]`);
   const marker = '<!-- memoria-agente -->';
   if (!body.includes(marker)) body += `\n${marker}\nAntes da tarefa, consulte cerebro_buscar e leia as notas do projeto. Use o contexto histórico como referência, validando se continua atual. Ao devolver o resultado, inclua aprendizados candidatos e evidências para o coordenador registrar uma única vez via cerebro_registrar. Siga I:/Cerebro/MEMORIA-COMPARTILHADA.md.\n`;
