@@ -33,6 +33,9 @@ services:
       - I:/CarecaBrain/CarecaBrain/conhecimento/sessoes-compartilhadas:/vault/conhecimento/sessoes-compartilhadas:rw
       - I:/CarecaBrain/_ferramentas:/cerebro-tools:ro
       - I:/Jarvis/dados:/jarvis-data:ro
+      # Estúdio de código: projetos do I: (decisão do usuário em 2026-10-18). Cada pasta com package.json ou .git vira
+      # workspace; vault, modelos e backups ficam fora (server/http/workspaces.ts). Escritas e comandos pedem aprovação.
+      - I:/:/projetos/I:rw
     mem_limit: 8g
     # Opções que podem vir do .env (ou do ambiente) para dentro do container.
     environment:
@@ -42,6 +45,7 @@ services:
       HABBLAUD_BIND: ${HABBLAUD_BIND:-127.0.0.1}
       HABBLAUD_TERMINAL: ${HABBLAUD_TERMINAL:-}
       HABBLAUD_AGENT_WORKSPACE: /workspace
+      HABBLAUD_AGENT_ROOTS: ${HABBLAUD_AGENT_ROOTS:-/projetos/I}
       HABBLAUD_AGENT_TOKEN_BUDGET: ${HABBLAUD_AGENT_TOKEN_BUDGET:-120000}
       HABBLAUD_CEREBRO_CLI: /cerebro/cerebro-cli.mjs
       HABBLAUD_CEREBRO_PROJECT: OmniRoute + Habblaud
