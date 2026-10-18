@@ -34,6 +34,7 @@ import { TopBar } from './topbar';
 import { UpdateBanner } from './update';
 import { FreeArea } from './viewport';
 import { OmniChatPanel } from './chat';
+import { StudioPanel } from './studio';
 import type { OfficeTheme } from '../world/api';
 
 /** Relógio dos tempos relativos ("há 5 s"). */
@@ -177,11 +178,14 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   const splash = new Splash(ctx);
   timelapse = new TimelapsePlayer(ctx);
   const omni = new OmniChatPanel(ctx);
+  // Estúdio de código em tela cheia (tecla E): conversa, aprovações, uso e cartão do projeto numa tela só.
+  const studio = new StudioPanel(ctx);
+  topbar.addPanelButton(studio.button);
   const scrim = h('div', { class: 'ui-scrim', attrs: { 'aria-hidden': 'true' }, on: { click: () => ctx.togglePanel('sidebar', false) } });
 
   root.classList.add('ui-root');
   root.dataset.officeTheme = prefs.officeTheme;
-  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, omni.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, tip.el, settings.el, history.el, help.el, live, splash.el);
+  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, omni.el, timelapse.el, timelapse.badge, studio.el, toasts.el, banner.el, update.el, empty.el, tip.el, settings.el, history.el, help.el, live, splash.el);
   if (new URLSearchParams(location.search).has("settings")) {
     requestAnimationFrame(() => settings.toggle(topbar.settingsBtn));
   }
@@ -206,7 +210,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   void syncTheme();
   const themeTimer = setInterval(() => void syncTheme(), 2_000);
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, history, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster, omni];
+  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, history, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster, omni, studio];
 
   // ---------------------------------------------------------------- renderização agrupada por quadro
   let rafId = 0;

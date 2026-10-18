@@ -263,6 +263,11 @@ function textFromReply(reply: AgentModelReply): string {
   return (reply.content ?? []).filter((block) => block.type === 'text' && typeof block.text === 'string').map((block) => block.text).join('');
 }
 
+/** Tira o texto de preenchimento do OmniRoute ('(empty response)') do começo de um bloco de texto. */
+export function stripPlaceholder(text: string): string {
+  return text.replace(/^\s*\(empty response\)\s*/i, '');
+}
+
 function validTokenCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
@@ -676,7 +681,9 @@ export class AgentRuntime {
         if (reply.model) this.emit(job, { type: 'model', model: reply.model });
         const blocks = reply.content ?? [];
         for (const block of blocks) {
-          if (block.type === 'text' && typeof block.text === 'string' && block.text) this.emit(job, { type: 'text', text: block.text });
+          // O OmniRoute põe '(empty response)' nas etapas que só chamam ferramenta: não é texto do agente.
+          const text = block.type === 'text' && typeof block.text === 'string' ? stripPlaceholder(block.text) : '';
+          if (text) this.emit(job, { type: 'text', text });
         }
         const calls = blocks.filter((block) => block.type === 'tool_use');
         if (!calls.length) {
