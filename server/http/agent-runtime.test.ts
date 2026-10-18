@@ -72,7 +72,7 @@ describe('runtime multiagente', () => {
     expect(events.some(event => event.activity?.includes('17000/20000'))).toBe(true);
   });
 
-  it('keeps conservative usage when absent and records only operational metadata', async () => {
+  it('keeps conservative usage when absent and does not record a conversation without writes', async () => {
     const record = vi.fn(async () => 'conhecimento/note.md');
     const prepare = vi.fn(async () => 'Referência validada');
     const complete: AgentModel = vi.fn(async request => {
@@ -82,9 +82,8 @@ describe('runtime multiagente', () => {
     const events: AgentStreamEvent[] = [];
     new AgentRuntime({ rootDir: process.cwd(), complete, memory: { prepare, record } }).start({ message: 'Entrada confidencial sintética' }, event => events.push(event));
     await waitForDone(events);
-    expect(record).toHaveBeenCalledOnce();
-    expect(JSON.stringify(record.mock.calls)).not.toContain('confidencial');
-    expect(JSON.stringify(record.mock.calls)).toContain('resposta-final-recebida');
+    // Conversa sem escrita aprovada não vira nota no vault (antes até um "ok" virava).
+    expect(record).not.toHaveBeenCalled();
     expect(events.some(event => event.activity?.includes('1 com estimativa'))).toBe(true);
   });
 
@@ -100,7 +99,8 @@ describe('runtime multiagente', () => {
     expect(approval.approval?.newContent).toContain('Teste de cache passou');
     runtime.approve(id, approval.approval!.id, 'approve');
     await waitForDone(events);
-    expect(record).toHaveBeenCalledTimes(2);
+    // Só o aprendizado aprovado; sem escrita de arquivo não há resumo operacional.
+    expect(record).toHaveBeenCalledOnce();
     expect(JSON.stringify(record.mock.calls)).toContain('Decisão verificada');
   });
 

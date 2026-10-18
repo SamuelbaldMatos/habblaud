@@ -1,7 +1,7 @@
 // Tap de statusline (scripts/statusline-tap.mjs, testado como processo de verdade) e o instalador
 // (scripts/statusline-install.ts). Tudo com HOME e config dirs FALSOS em pastas temporárias.
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -16,7 +16,7 @@ import {
   wrapCommand,
   type RunOptions,
 } from '../../scripts/statusline-install';
-import { tempDir } from './fixtures';
+import { POSIX_MODES, posixShell, tempDir } from './fixtures';
 
 const TAP = resolve(__dirname, '../../scripts/statusline-tap.mjs');
 const NOW_S = Math.floor(Date.now() / 1000);
@@ -62,12 +62,13 @@ describe('statusline-tap.mjs', () => {
     const files = readdirSync(usageDir);
     expect(files).toEqual(['.claude-conta2.json']);
     const file = join(usageDir, files[0]);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    // O Windows não tem bits de permissão POSIX (chmod só liga/desliga o somente leitura).
+    if (POSIX_MODES) expect(statSync(file).mode & 0o777).toBe(0o600);
     const rec = JSON.parse(readFileSync(file, 'utf8'));
     expect(Object.keys(rec).sort()).toEqual(['accountId', 'configDir', 'fetchedAt', 'five_hour', 'seven_day']);
     expect(rec).toMatchObject({
       accountId: '.claude-conta2',
-      configDir: '/fake/home/.claude-conta2',
+      configDir: resolve('/fake/home/.claude-conta2'),
       five_hour: { utilization: 42.5, resets_at: NOW_S + 3_600 },
       seven_day: { utilization: 15, resets_at: NOW_S + 86_400 },
     });
@@ -82,7 +83,7 @@ describe('statusline-tap.mjs', () => {
     // O instalador põe o comando complexo entre aspas simples; o shell do Claude Code as tira e o tap
     // recebe o comando inteiro como um único argumento.
     const complex = `printf '%s|' "a b" | tr a-z A-Z`;
-    const viaShell = spawnSync('/bin/sh', ['-c', `"${process.execPath}" "${TAP}" -- ${encodeOriginal(complex)}`], {
+    const viaShell = spawnSync(posixShell(), ['-c', `"${process.execPath}" "${TAP}" -- ${encodeOriginal(complex)}`], {
       input: statusJson(),
       env,
       encoding: 'utf8',
@@ -113,7 +114,7 @@ describe('statusline-tap.mjs', () => {
 
   it('sem transcript_path: CLAUDE_CONFIG_DIR (primeiro da lista) e depois ~/.claude', () => {
     tap([], statusJson({ transcript_path: undefined }), { CLAUDE_CONFIG_DIR: '/outra/.claude-trabalho,/x' });
-    expect(JSON.parse(readFileSync(join(usageDir, '.claude-trabalho.json'), 'utf8')).configDir).toBe('/outra/.claude-trabalho');
+    expect(JSON.parse(readFileSync(join(usageDir, '.claude-trabalho.json'), 'utf8')).configDir).toBe(resolve('/outra/.claude-trabalho'));
     tap([], statusJson({ transcript_path: undefined }));
     expect(JSON.parse(readFileSync(join(usageDir, '.claude.json'), 'utf8')).configDir).toBe(join(env.HOME!, '.claude'));
   });
@@ -171,9 +172,11 @@ describe('statusline-install.ts (funções puras)', () => {
   it('node estável no PATH vira caminho absoluto; nvm/fnm viram só "node"', () => {
     const home = '/Users/fulano';
     const has = (set: string[]) => (p: string) => set.includes(p);
-    expect(detectNodeCommand({ PATH: '/opt/homebrew/bin:/usr/bin' }, home, has(['/opt/homebrew/bin/node', '/usr/bin/node']))).toBe('/opt/homebrew/bin/node');
-    expect(detectNodeCommand({ PATH: `${home}/.nvm/versions/node/v24.1.0/bin:/opt/homebrew/bin` }, home, has([`${home}/.nvm/versions/node/v24.1.0/bin/node`, '/opt/homebrew/bin/node']))).toBe('node');
-    expect(detectNodeCommand({ PATH: '' }, home, () => false)).toBe('node');
+    expect(detectNodeCommand({ PATH: '/opt/homebrew/bin:/usr/bin' }, home, has(['/opt/homebrew/bin/node', '/usr/bin/node']), 'linux')).toBe('/opt/homebrew/bin/node');
+    expect(detectNodeCommand({ PATH: `${home}/.nvm/versions/node/v24.1.0/bin:/opt/homebrew/bin` }, home, has([`${home}/.nvm/versions/node/v24.1.0/bin/node`, '/opt/homebrew/bin/node']), 'linux')).toBe('node');
+    expect(detectNodeCommand({ PATH: '' }, home, () => false, 'linux')).toBe('node');
+    // Windows: sempre o node do PATH do Git Bash.
+    expect(detectNodeCommand({ PATH: 'C:\\Program Files\\nodejs' }, 'C:\\Users\\f', () => true, 'win32')).toBe('node');
   });
 });
 
@@ -206,7 +209,7 @@ describe('statusline-install.ts (arquivos, HOME falso)', () => {
     expect(c.model).toBe('opus');
     expect(c.env).toEqual({ FOO: '1' });
     expect(c.statusLine).toEqual({ type: 'command', command: wrapCommand(process.execPath, TAP_SCRIPT, 'npx -y ccstatusline'), padding: 0 });
-    expect(statSync(join(home, '.claude', 'settings.json')).mode & 0o777).toBe(0o644);
+    if (POSIX_MODES) expect(statSync(join(home, '.claude', 'settings.json')).mode & 0o777).toBe(0o644);
     const backup = join(home, '.claude', 'settings.json.habblaud-backup-20261006-140509');
     expect(JSON.parse(readFileSync(backup, 'utf8'))).toEqual(original);
     // Conta sem settings.json: cria um só com o statusline do tap (sem backup, não havia nada).
@@ -224,7 +227,7 @@ describe('statusline-install.ts (arquivos, HOME falso)', () => {
     const cmd: string = read('.claude').statusLine.command.replace('npx -y ccstatusline', 'cat');
     const usageDir = join(tmp.dir, 'usage');
     const input = statusJson({ transcript_path: join(home, '.claude', 'projects', '-p', 's.jsonl') });
-    const r = spawnSync('/bin/sh', ['-c', cmd], { input, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home, HABBLAUD_USAGE_DIR: usageDir } });
+    const r = spawnSync(posixShell(), ['-c', cmd], { input, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home, HABBLAUD_USAGE_DIR: usageDir } });
     expect(r.stdout).toBe(input);
     expect(JSON.parse(readFileSync(join(usageDir, '.claude.json'), 'utf8')).five_hour.utilization).toBe(42.5);
   });
@@ -264,12 +267,15 @@ describe('statusline-install.ts (arquivos, HOME falso)', () => {
 
   it('nome antigo: se não der para mover, avisa e instala assim mesmo', () => {
     mkdirSync(join(home, '.codetown', 'usage'), { recursive: true });
-    // HOME só de leitura: o rename de ~/.codetown falha (as contas, por dentro, seguem graváveis).
-    chmodSync(home, 0o555);
+    // Faz o rename de ~/.codetown falhar (as contas, por dentro, seguem graváveis): HOME só de leitura no POSIX;
+    // no Windows o chmod não impede rename, mas um arquivo aberto dentro da pasta impede.
+    const lock = POSIX_MODES ? undefined : openSync(join(home, '.codetown', 'usage', 'aberto.json'), 'w');
+    if (POSIX_MODES) chmodSync(home, 0o555);
     try {
       expect(exec('install')).toBe(0);
     } finally {
-      chmodSync(home, 0o755);
+      if (POSIX_MODES) chmodSync(home, 0o755);
+      if (lock !== undefined) closeSync(lock);
     }
     expect(out[0]).toMatch(/^! não consegui levar ~\/\.codetown para ~\/\.habblaud \(.+\); mova a pasta à mão\.$/);
     expect(existsSync(join(home, '.codetown', 'usage'))).toBe(true);

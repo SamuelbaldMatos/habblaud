@@ -26,6 +26,7 @@ import { createBuildReader } from './build';
 import { UpdateChecker } from './updates/checker';
 import { ThemeStore } from './theme';
 import { VscodeActivitySource } from './sources/vscode';
+import { DelegationSource } from './sources/delegations';
 import { CodexWatcher } from './sources/codex-watcher';
 import { createOmnirouteHandler } from './http/omniroute';
 
@@ -53,6 +54,7 @@ const late: {
   watcher?: ClaudeWatcher;
   permissions?: PermissionRegistry;
   vscode?: VscodeActivitySource;
+  delegations?: DelegationSource;
   codex?: CodexWatcher;
 } = {};
 // Versão nova: consulta a release mais recente no GitHub a cada 6 h (HABBLAUD_UPDATE_CHECK=0 desliga).
@@ -78,7 +80,7 @@ const office = new Office({
   build: config.dev ? undefined : createBuildReader(config.rootDir),
   startedAt,
   accounts: (sessions) => accounts.list(sessions),
-  sources: () => [...(late.watcher?.sources() ?? []), ...(late.codex?.sources() ?? []), ...(late.vscode?.sources() ?? [])],
+  sources: () => [...(late.watcher?.sources() ?? []), ...(late.codex?.sources() ?? []), ...(late.vscode?.sources() ?? []), ...(late.delegations?.sources() ?? [])],
   accountName: (id) => accounts.find(id)?.detected.name,
   terminal: config.terminal,
   permissions: () => late.permissions?.snapshot() ?? new Map(),
@@ -91,6 +93,8 @@ late.office = office;
 late.watcher = watcher;
 late.codex = codex;
 late.vscode = vscode;
+const delegations = new DelegationSource({ office });
+late.delegations = delegations;
 const hub = new Hub(office);
 // "Meu dia": amostra o escritório a cada segundo e persiste em <dataDir>/stats/ (ver history/daystats.ts).
 const stats = new DayStatsService({ dir: join(config.dataDir, 'stats'), snapshot: () => hub.current() });
@@ -121,6 +125,7 @@ if (config.demo) office.setDemo(true);
 watcher.start();
 codex.start();
 vscode.start();
+delegations.start();
 accounts.start();
 hub.start();
 if (timeline) {
@@ -154,10 +159,16 @@ const api = createApiHandler({
   updates,
   theme,
   vscode,
+  delegations,
   omniroute: config.terminal
     ? createOmnirouteHandler({
         inDocker: config.inDocker,
-  rootDir: process.env.HABBLAUD_AGENT_WORKSPACE?.trim() || (config.inDocker ? undefined : config.rootDir),
+        rootDir: process.env.HABBLAUD_AGENT_WORKSPACE?.trim() || (config.inDocker ? undefined : config.rootDir),
+        // Raízes com outros projetos (um nível abaixo vira workspace); vazio = só o Habblaud.
+        roots: (process.env.HABBLAUD_AGENT_ROOTS ?? '').split(',').filter((r) => r.trim()),
+        contextDir: process.env.HABBLAUD_CONTEXT_DIR?.trim() || undefined,
+        onOmniUsage: (byEmail) => accounts.applyOmniroute(byEmail),
+        pollOmniStatus: true,
       })
     : undefined,
 });

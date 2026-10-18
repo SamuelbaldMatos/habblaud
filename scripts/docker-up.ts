@@ -32,6 +32,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AccountInfo, SourceInfo } from '../shared/types';
 import { detectAccounts, discoverClaudeDirs, type DetectedAccount } from '../server/accounts/detect';
 import { describeStateMigration, LEGACY_NAME, legacyEnvWarning, migrateLegacyStateDir } from '../server/legacy';
+import { tildify as tildifyIn } from './statusline-install';
 import { makeClaudeRunner, MIN_CLAUDE_VERSION, readPackageVersion, updateInstalledMods, type ModUpdateResult } from './mod-install';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -431,7 +432,7 @@ function ensureUsageDir(): string | undefined {
 }
 
 function tildify(p: string): string {
-  return p === HOME || p.startsWith(`${HOME}/`) ? `~${p.slice(HOME.length)}` : p;
+  return tildifyIn(p, HOME);
 }
 
 // ---------------------------------------------------------------------------------------------

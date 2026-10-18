@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { OmniStatusError, OmniStatusService } from '../omniroute/status';
+import type { AccountUsage } from '../../shared/types';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -6,24 +8,12 @@ import { HttpError, readJson, sendJson } from './app';
 import { isLoopbackAddress, isLoopbackHost } from './guard';
 import { AgentRuntime, type AgentModel, type AgentModelReply, type AgentStreamEvent } from './agent-runtime';
 import { createAgentMemory } from './agent-memory';
+import { ProjectContextCache } from './project-context';
+import { discoverWorkspaces } from './workspaces';
 
-export const OMNIROUTE_COMBOS = [
-  'orquestrador',
-  'direcionador',
-  'codigo',
-  'codigo-pesado',
-  'revisor',
-  'texto',
-  'analise',
-  'contexto-longo',
-  'complexo',
-  'maximo',
-  'seguranca',
-  'rapido',
-  'local-privado',
-] as const;
+import { OMNIROUTE_COMBOS, type OmniCombo } from '../../shared/omniroute-combos';
 
-export type OmniCombo = (typeof OMNIROUTE_COMBOS)[number];
+export { OMNIROUTE_COMBOS, type OmniCombo };
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
@@ -40,7 +30,13 @@ export interface ChatRequest {
 interface AgentRunRequest {
   message: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** Id de workspace (validado pelo runtime contra a lista conhecida; nunca vira caminho). */
+  workspace?: string;
+  /** Conversa do estúdio: a memória do Cérebro é consultada uma vez por conversa. */
+  threadId?: string;
 }
+
+const ID_FIELD = /^[A-Za-z0-9._-]{1,64}$/;
 
 const MAX_MESSAGES = 20;
 const MAX_MESSAGE_LENGTH = 24_000;
@@ -97,13 +93,40 @@ function resolveOmnirouteConfig(inDocker: boolean): { url: string; token?: strin
   return { url, token };
 }
 
+/**
+ * Endereço do OmniRoute validado ANTES de qualquer chamada com a chave: só HTTP local (loopback ou, no Docker,
+ * host.docker.internal), sem usuário/senha na URL. Fora disso a chave nunca sai do processo.
+ */
+export function localOmnirouteEndpoint(url: string, inDocker: boolean): URL {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(url);
+  } catch {
+    throw new Error('URL local do OmniRoute inválida.');
+  }
+  const local =
+    endpoint.protocol === 'http:' &&
+    !endpoint.username &&
+    !endpoint.password &&
+    (isLoopbackHost(endpoint.host) || (inDocker && endpoint.hostname === 'host.docker.internal'));
+  if (!local) throw new Error('OmniRoute deve estar configurado em um endereço HTTP local.');
+  return endpoint;
+}
+
 function parseAgentRunRequest(value: unknown): AgentRunRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'corpo inválido');
-  const request = value as { message?: unknown; messages?: unknown };
+  const request = value as { message?: unknown; messages?: unknown; workspace?: unknown; threadId?: unknown };
   if (typeof request.message !== 'string' || !request.message.trim() || request.message.length > MAX_MESSAGE_LENGTH) {
     throw new HttpError(400, 'mensagem inválida');
   }
-  if (request.messages === undefined) return { message: request.message.trim(), messages: [] };
+  const extra: Pick<AgentRunRequest, 'workspace' | 'threadId'> = {};
+  for (const key of ['workspace', 'threadId'] as const) {
+    const v = request[key];
+    if (v === undefined) continue;
+    if (typeof v !== 'string' || !ID_FIELD.test(v)) throw new HttpError(400, `${key} inválido`);
+    extra[key] = v;
+  }
+  if (request.messages === undefined) return { message: request.message.trim(), messages: [], ...extra };
   if (!Array.isArray(request.messages) || request.messages.length > 10) throw new HttpError(400, 'histórico inválido');
   const messages = request.messages.map((message) => {
     if (
@@ -118,7 +141,30 @@ function parseAgentRunRequest(value: unknown): AgentRunRequest {
     }
     return { role: (message as ChatMessage).role as 'user' | 'assistant', content: (message as ChatMessage).content };
   });
-  return { message: request.message.trim(), messages };
+  return { message: request.message.trim(), messages, ...extra };
+}
+
+/**
+ * Escreve eventos SSE de uma tarefa. Com `started = false` guarda tudo até `flush()` (o replay de /stream chega
+ * antes do cabeçalho). Fecha a resposta no 'done'.
+ */
+function sseWriter(res: ServerResponse, started = true): ((event: AgentStreamEvent) => void) & { flush(): void } {
+  const pending: AgentStreamEvent[] = [];
+  let open = started;
+  const write = (event: AgentStreamEvent) => {
+    if (res.destroyed || res.writableEnded) return;
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    if (event.type === 'done') res.end();
+  };
+  const emit = ((event: AgentStreamEvent) => {
+    if (open) write(event);
+    else pending.push(event);
+  }) as ((event: AgentStreamEvent) => void) & { flush(): void };
+  emit.flush = () => {
+    open = true;
+    for (const event of pending.splice(0)) write(event);
+  };
+  return emit;
 }
 
 function localRequest(req: IncomingMessage, opts: { inDocker: boolean }): boolean {
@@ -128,22 +174,45 @@ function localRequest(req: IncomingMessage, opts: { inDocker: boolean }): boolea
 export function createOmnirouteHandler(opts: {
   inDocker: boolean;
   rootDir?: string;
+  /** Raízes com projetos (um nível abaixo) para o estúdio; ver server/http/workspaces.ts. */
+  roots?: string[];
+  /** Pasta do cache do cartão do projeto (no Docker, /data/context). */
+  contextDir?: string;
+  onOmniUsage?: (byEmail: ReadonlyMap<string, AccountUsage>) => void;
+  /** Liga a leitura periódica do estado do OmniRoute (o servidor real liga; os testes não). */
+  pollOmniStatus?: boolean;
 }): (req: IncomingMessage, res: ServerResponse, path: string) => boolean {
+  // Estado e cotas do OmniRoute (cache de 60 s, renovado a cada 2 min): alimenta o painel e o uso das contas.
+  const omniStatus = new OmniStatusService({
+    get: async (p) => {
+      const { url, token } = resolveOmnirouteConfig(opts.inDocker);
+      if (!token) throw new OmniStatusError('Token do OmniRoute ausente.');
+      let endpoint: URL;
+      try {
+        // Valida o destino ANTES de mandar a chave.
+        endpoint = localOmnirouteEndpoint(url, opts.inDocker);
+      } catch (err) {
+        throw new OmniStatusError((err as Error).message);
+      }
+      let r: Response;
+      try {
+        r = await fetch(new URL(p, endpoint), { headers: { Authorization: `Bearer ${token}` }, redirect: 'error', signal: AbortSignal.timeout(15_000) });
+      } catch {
+        throw new OmniStatusError('OmniRoute fora do ar ou sem resposta em 15 s.');
+      }
+      if (!r.ok) {
+        await r.body?.cancel();
+        throw new OmniStatusError(`OmniRoute respondeu HTTP ${r.status} em ${p.split('?')[0]}.`);
+      }
+      return r.json();
+    },
+    onSnapshot: (snap) => opts.onOmniUsage?.(snap.claudeUsageByEmail),
+  });
+  if (opts.pollOmniStatus) omniStatus.start();
   const complete: AgentModel = async (request) => {
     const { url, token } = resolveOmnirouteConfig(opts.inDocker);
     if (!token) throw new Error('Token do OmniRoute ausente. Verifique o perfil omniroute ou OMNIROUTE_TOKEN.');
-    let endpoint: URL;
-    try {
-      endpoint = new URL(url);
-    } catch {
-      throw new Error('URL local do OmniRoute inválida.');
-    }
-    const localEndpoint =
-      endpoint.protocol === 'http:' &&
-      !endpoint.username &&
-      !endpoint.password &&
-      (isLoopbackHost(endpoint.host) || (opts.inDocker && endpoint.hostname === 'host.docker.internal'));
-    if (!localEndpoint) throw new Error('OmniRoute deve estar configurado em um endereço HTTP local.');
+    const endpoint = localOmnirouteEndpoint(url, opts.inDocker);
     let upstream: Response;
     try {
       upstream = await fetch(new URL('/v1/messages', endpoint), {
@@ -162,7 +231,8 @@ export function createOmnirouteHandler(opts: {
           messages: request.messages,
           ...(request.tools ? { tools: request.tools } : {}),
         }),
-        signal: AbortSignal.any([request.signal, AbortSignal.timeout(180_000)]),
+        // Sem streaming o corte de 110 s do OmniRoute não vale; 600 s dá tempo ao modelo local na reserva.
+        signal: AbortSignal.any([request.signal, AbortSignal.timeout(600_000)]),
       });
     } catch (error) {
       if ((error as Error).name === 'AbortError') throw error;
@@ -189,8 +259,11 @@ export function createOmnirouteHandler(opts: {
   };
   const memory = process.env.HABBLAUD_CEREBRO_CLI && process.env.HABBLAUD_CEREBRO_PROJECT
     ? createAgentMemory({ cli: process.env.HABBLAUD_CEREBRO_CLI, project: process.env.HABBLAUD_CEREBRO_PROJECT }) : undefined;
-  const runtime = opts.rootDir ? new AgentRuntime({
-    rootDir: opts.rootDir, complete, memory,
+  const workspaces = discoverWorkspaces(opts.rootDir, opts.roots ?? []);
+  const projectContext = new ProjectContextCache({ cacheDir: opts.contextDir });
+  const runtime = Object.keys(workspaces).length ? new AgentRuntime({
+    workspaces, complete, memory,
+    context: { get: (ws, dir) => projectContext.get(ws, dir), render: (card) => projectContext.render(card) },
     maxTotalTokens: process.env.HABBLAUD_AGENT_TOKEN_BUDGET ? Number(process.env.HABBLAUD_AGENT_TOKEN_BUDGET) : undefined,
   }) : undefined;
 
@@ -205,6 +278,15 @@ export function createOmnirouteHandler(opts: {
         return true;
       }
       sendJson(res, 200, { ok: true, combos: OMNIROUTE_COMBOS });
+      return true;
+    }
+
+    if (path === '/api/omniroute/status') {
+      if (!localRequest(req, opts)) {
+        sendJson(res, 403, { error: 'o estado do OmniRoute só é servido localmente' });
+        return true;
+      }
+      void omniStatus.snapshot().then((snap) => sendJson(res, 200, snap.status));
       return true;
     }
 
@@ -229,16 +311,10 @@ export function createOmnirouteHandler(opts: {
           }
           let endpoint: URL;
           try {
-            endpoint = new URL(url);
-          } catch {
-            throw new HttpError(503, 'URL local do OmniRoute inválida.');
+            endpoint = localOmnirouteEndpoint(url, opts.inDocker);
+          } catch (err) {
+            throw new HttpError(503, (err as Error).message);
           }
-          const localEndpoint =
-            endpoint.protocol === 'http:' &&
-            !endpoint.username &&
-            !endpoint.password &&
-            (isLoopbackHost(endpoint.host) || (opts.inDocker && endpoint.hostname === 'host.docker.internal'));
-          if (!localEndpoint) throw new HttpError(503, 'OmniRoute deve estar configurado em um endereço HTTP local.');
 
           const system = reqBody.system || 'Você é o assistente inteligente integrado ao Habblaud e VS Code via OmniRoute. Responda de forma concisa, precisa e com blocos de código formatados quando necessário.';
 
@@ -395,17 +471,14 @@ export function createOmnirouteHandler(opts: {
             Connection: 'keep-alive',
             'X-Content-Type-Options': 'nosniff',
           });
-          let jobId: string | undefined;
-          const emit = (event: AgentStreamEvent) => {
-            if (res.destroyed || res.writableEnded) return;
-            res.write(`data: ${JSON.stringify(event)}\n\n`);
-            if (event.type === 'done') res.end();
-          };
-          res.on('close', () => {
-            if (jobId && !res.writableEnded) runtime.cancel(jobId);
-          });
+          const emit = sseWriter(res);
+          // Fechar a aba ou recarregar a página NÃO cancela a tarefa: ela segue no servidor e o estúdio reanexa
+          // por /jobs/:id/stream?after=N. Cancelar é só pelo botão Parar (DELETE /jobs/:id).
+          let off: (() => void) | undefined;
+          res.on('close', () => off?.());
           try {
-            jobId = runtime.start(request, emit);
+            const jobId = runtime.start(request);
+            off = runtime.subscribe(jobId, 0, emit);
           } catch (error) {
             emit({ type: 'error', error: (error as Error).message });
             emit({ type: 'done' });
@@ -419,6 +492,74 @@ export function createOmnirouteHandler(opts: {
             res.end();
           }
         });
+      return true;
+    }
+
+    if (path === '/api/omniroute/workspaces' || path === '/api/omniroute/jobs' || path === '/api/omniroute/context') {
+      const allowed = path === '/api/omniroute/context' ? ['GET', 'POST'] : ['GET'];
+      if (!allowed.includes(method)) {
+        res.setHeader('Allow', allowed.join(', '));
+        sendJson(res, 405, { error: 'método não permitido' });
+        return true;
+      }
+      req.resume();
+      if (!localRequest(req, opts)) {
+        sendJson(res, 403, { error: 'o estúdio só aceita conexões locais' });
+        return true;
+      }
+      if (!runtime) {
+        sendJson(res, 503, { error: 'workspace de execução do agente não configurado' });
+        return true;
+      }
+      if (path === '/api/omniroute/workspaces') {
+        sendJson(res, 200, runtime.workspaceList());
+        return true;
+      }
+      if (path === '/api/omniroute/jobs') {
+        sendJson(res, 200, { jobs: runtime.list() });
+        return true;
+      }
+      const workspace = new URL(req.url ?? '/', 'http://x').searchParams.get('workspace') ?? undefined;
+      const dir = runtime.workspaceDir(workspace);
+      if (!dir) {
+        sendJson(res, 404, { error: 'workspace desconhecido' });
+        return true;
+      }
+      const id = workspace ?? runtime.workspaceList().default;
+      projectContext
+        .get(id, dir, { force: method === 'POST' })
+        .then((r) => sendJson(res, 200, r))
+        .catch(() => sendJson(res, 500, { error: 'não foi possível montar o cartão do projeto' }));
+      return true;
+    }
+
+    const streamMatch = /^\/api\/omniroute\/jobs\/([0-9a-f-]{36})\/stream$/.exec(path);
+    if (streamMatch) {
+      if (method !== 'GET') {
+        res.setHeader('Allow', 'GET');
+        sendJson(res, 405, { error: 'método não permitido' });
+        return true;
+      }
+      if (!localRequest(req, opts)) {
+        sendJson(res, 403, { error: 'o estúdio só aceita conexões locais' });
+        return true;
+      }
+      const afterRaw = Number(new URL(req.url ?? '/', 'http://x').searchParams.get('after') ?? '0');
+      const after = Number.isSafeInteger(afterRaw) && afterRaw >= 0 ? afterRaw : 0;
+      const emit = sseWriter(res, false);
+      const off = runtime?.subscribe(streamMatch[1], after, emit);
+      if (!off) {
+        sendJson(res, 404, { error: 'tarefa inexistente ou já descartada' });
+        return true;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      emit.flush();
+      res.on('close', off);
       return true;
     }
 

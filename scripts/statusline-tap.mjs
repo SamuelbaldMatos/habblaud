@@ -16,8 +16,8 @@
 // Regras: Node puro e sem dependências; qualquer falha na captura é ignorada em silêncio — o
 // statusline nunca pode quebrar nem ficar lento por causa do Habblaud. Instalação automática
 // (com backup do settings.json): npm run usage:install.
-import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +35,8 @@ export function originalCommand(argv) {
 /** Config dir da conta: pelo transcript_path (trecho antes de "/projects/"), CLAUDE_CONFIG_DIR ou ~/.claude. */
 export function configDirOf(input, env = process.env, home = env.HOME || homedir()) {
   const tp = typeof input?.transcript_path === 'string' ? input.transcript_path : '';
-  const at = tp.lastIndexOf('/projects/');
+  // No Windows o caminho vem com barras invertidas (C:\Users\x\.claude\projects\...).
+  const at = Math.max(tp.lastIndexOf('/projects/'), tp.lastIndexOf('\\projects\\'));
   if (at > 0) return resolve(tp.slice(0, at));
   const fromEnv = (env.CLAUDE_CONFIG_DIR ?? '').split(',')[0].trim();
   if (fromEnv) return resolve(fromEnv.replace(/^~(?=\/|$)/, home));
@@ -127,7 +128,7 @@ async function main() {
   // O comando original começa antes da captura (que roda enquanto ele trabalha): zero atraso extra.
   let child;
   try {
-    child = spawn(command, { shell: true, stdio: ['pipe', 'inherit', 'inherit'] });
+    child = spawn(command, { shell: shellOf(), stdio: ['pipe', 'inherit', 'inherit'] });
   } catch {
     tap(input.toString('utf8'));
     process.exitCode = 127;
@@ -142,6 +143,27 @@ async function main() {
   child.stdin.end(input);
   tap(input.toString('utf8'));
   process.exitCode = await done;
+}
+
+/**
+ * Shell do comando original: o mesmo em que o Claude Code roda o statusline. No Windows é o Git Bash
+ * (CLAUDE_CODE_GIT_BASH_PATH, ou o bash ao lado do git do PATH); o cmd.exe do `shell: true` quebraria comandos
+ * POSIX (aspas simples, pipes com tr, printf) e trocaria 
+ por 
+.
+ */
+export function shellOf(env = process.env, platform = process.platform) {
+  if (platform !== 'win32') return true;
+  const fromEnv = (env.CLAUDE_CODE_GIT_BASH_PATH ?? '').trim();
+  if (fromEnv && existsSync(fromEnv)) return fromEnv;
+  try {
+    const exec = execFileSync('git', ['--exec-path'], { encoding: 'utf8', windowsHide: true }).trim();
+    const bash = resolve(exec, '..', '..', '..', 'bin', 'bash.exe');
+    if (existsSync(bash)) return bash;
+  } catch {
+    // sem git: tenta o bash do PATH
+  }
+  return 'bash';
 }
 
 /** Chamado direto (e não importado pelos testes)? Compara caminhos reais (o repo pode ser um symlink). */

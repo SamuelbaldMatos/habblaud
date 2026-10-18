@@ -1,7 +1,7 @@
 // Contas observadas + uso de cada uma: tap de statusline (recomendado) e cache do /usage
 // gravado no .claude.json. Só arquivos locais: nada de credenciais nem chamadas de rede.
 import { basename, resolve } from 'node:path';
-import type { AccountInfo } from '../../shared/types';
+import type { AccountInfo, AccountUsage } from '../../shared/types';
 import { log } from '../log';
 import { detectAccounts, type DetectedAccount } from './detect';
 import { StatuslineUsageReader, type StatuslineUsage } from './statusline';
@@ -86,6 +86,21 @@ export class AccountsService {
       const best = mine.reduce<StatuslineUsage | undefined>((acc, f) => (!acc || f.usage.fetchedAt > acc.usage.fetchedAt ? f : acc), undefined);
       if (best) changed = this.usage.set(e.id, best.usage) || changed;
       else changed = this.usage.clear(e.id, 'statusline') || changed;
+    }
+    if (this.usageViewChanged()) changed = true;
+    if (changed) this.opts.onChange();
+  }
+
+  /**
+   * Uso da assinatura Claude visto pelo OmniRoute, por e-mail da conexão. Vale para toda conta do Habblaud com o
+   * mesmo e-mail (a conta normal e o perfil omniroute dividem a mesma assinatura). Conta sem par perde a fonte.
+   */
+  applyOmniroute(byEmail: ReadonlyMap<string, AccountUsage>): void {
+    let changed = false;
+    for (const e of this.list_) {
+      const usage = e.detected.email ? byEmail.get(e.detected.email.toLowerCase()) : undefined;
+      if (usage) changed = this.usage.set(e.id, usage) || changed;
+      else changed = this.usage.clear(e.id, 'omniroute') || changed;
     }
     if (this.usageViewChanged()) changed = true;
     if (changed) this.opts.onChange();

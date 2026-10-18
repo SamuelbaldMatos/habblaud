@@ -16,7 +16,7 @@
 // já capturado seguir valendo.
 import { accessSync, chmodSync, constants, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, delimiter, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, posix, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { discoverClaudeDirs } from '../server/accounts/detect';
 import { describeStateMigration, LEGACY_NAME, migrateLegacyStateDir } from '../server/legacy';
@@ -160,8 +160,8 @@ export function planUninstall(settings: Settings): PlanAction {
 
 /** Diretórios onde um `node` fora de gerenciadores de versão fica estável entre atualizações. */
 function stableNode(p: string, home: string): boolean {
-  const dir = dirname(p);
-  const stable = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', join(home, '.volta', 'bin'), join(home, '.asdf', 'shims'), join(home, '.local', 'share', 'mise', 'shims')];
+  const dir = posix.dirname(p);
+  const stable = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', posix.join(home, '.volta', 'bin'), posix.join(home, '.asdf', 'shims'), posix.join(home, '.local', 'share', 'mise', 'shims')];
   return stable.includes(dir);
 }
 
@@ -170,10 +170,18 @@ function stableNode(p: string, home: string): boolean {
  * (Homebrew, /usr/local...); senão só `node` — caminhos do nvm/fnm mudam a cada versão, e o statusline
  * original (npx...) já depende do node no PATH de qualquer forma.
  */
-export function detectNodeCommand(env: NodeJS.ProcessEnv, home: string, isExecutable: (p: string) => boolean = canExecute): string {
-  for (const dir of (env.PATH ?? '').split(delimiter)) {
+export function detectNodeCommand(
+  env: NodeJS.ProcessEnv,
+  home: string,
+  isExecutable: (p: string) => boolean = canExecute,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  // Windows: o statusline roda no Git Bash, que acha o node do PATH; caminho absoluto (com espaços em
+  // "Program Files" e barras invertidas) só traria problema de aspas.
+  if (platform === 'win32') return 'node';
+  for (const dir of (env.PATH ?? '').split(posix.delimiter)) {
     if (!dir) continue;
-    const p = join(dir, 'node');
+    const p = posix.join(dir, 'node');
     if (!isExecutable(p)) continue;
     return stableNode(p, home) ? p : 'node';
   }
@@ -242,8 +250,15 @@ function stamp(d: Date): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-export function tildify(p: string, home: string): string {
-  return p === home || p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p;
+/**
+ * Caminho para exibir, com `~` no lugar do HOME. No Windows as barras invertidas viram `/` (o Windows aceita as
+ * duas): sem isso C:\Users\x\.claude nunca casava com o HOME e as mensagens saíam com o caminho inteiro.
+ */
+export function tildify(p: string, home: string, pathSep: string = sep): string {
+  const norm = (s: string) => (pathSep === '\\' ? s.replace(/\\/g, '/') : s);
+  const P = norm(p);
+  const H = norm(home).replace(/\/+$/, '');
+  return H && (P === H || P.startsWith(`${H}/`)) ? `~${P.slice(H.length)}` : P;
 }
 
 export function readSettings(file: string): { settings: Settings; raw?: string } | { error: string } {

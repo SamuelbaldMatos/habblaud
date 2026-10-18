@@ -88,6 +88,8 @@ interface ModEnv {
 
 /** Normaliza um caminho (barras repetidas, `.`, `..` e a barra do fim): o ambiente do mod não tem node:path. */
 export function normalizePath(p: string): string {
+  // Windows: `C:\Users\x` vira `C:/Users/x` (o Claude Code no Windows aceita as duas barras).
+  p = p.replace(/\\/g, '/')
   const abs = p.startsWith('/')
   const out: string[] = []
   for (const seg of p.split('/')) {
@@ -105,7 +107,7 @@ export function normalizePath(p: string): string {
 
 /** `~` no começo vira o HOME (como o tap faz com CLAUDE_CONFIG_DIR e HABBLAUD_USAGE_DIR). */
 function expandHome(p: string, home: string | undefined): string {
-  return home && /^~(?=\/|$)/.test(p) ? home + p.slice(1) : p
+  return home && /^~(?=[\\/]|$)/.test(p) ? home + p.slice(1) : p
 }
 
 /** Config dir da conta: o primeiro item de CLAUDE_CONFIG_DIR (com `~` expandido) ou ~/.claude. */
@@ -117,7 +119,7 @@ export function configDirOf(claudeConfigDir: string | undefined, home: string | 
 
 /** Id da conta = nome da pasta (AccountInfo.id do servidor, ex.: ".claude-conta2"). */
 export function accountIdOf(configDir: string): string | undefined {
-  const name = configDir.split('/').filter(Boolean).pop()
+  const name = configDir.split(/[\\/]/).filter(Boolean).pop()
   return name && name !== '.' && name !== '..' ? name : undefined
 }
 
@@ -249,7 +251,8 @@ let polling = false
 /** O ambiente da sessão, lido uma vez por carga (cada nome escrito por extenso, como a análise exige). */
 async function readEnv($: EngineInterface): Promise<ModEnv> {
   if (env) return env
-  const home = (await $.env.get('HOME'))?.trim() || undefined
+  // No Windows não existe HOME: sem o USERPROFILE o mod não sabia onde gravar e o uso nunca aparecia.
+  const home = (await $.env.get('HOME'))?.trim() || (await $.env.get('USERPROFILE'))?.trim() || undefined
   const configDir = configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), home)
   const next: ModEnv = {
     port: portOf(await $.env.get('HABBLAUD_PORT')),

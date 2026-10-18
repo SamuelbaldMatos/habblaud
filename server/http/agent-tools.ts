@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { constants } from 'node:fs';
-import { lstat, open, readFile, realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { constants, existsSync } from 'node:fs';
+import { lstat, open, readdir, readFile, realpath } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 export class AgentToolError extends Error {}
 
@@ -24,6 +24,25 @@ function isWithin(root: string, candidate: string): boolean {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
+/** Pastas que o agente nunca lê nem lista: credenciais, configurações de IA, dependências, dados de cliente do vault. */
+const PROTECTED_DIRS = new Set([
+  '.git', 'node_modules', '.env', '.claude', '.copilot', '.codex', '.gemini', '.omniroute', '.ssh', '.gnupg', '.aws',
+  '.azure', '.kube', '.docker', '.npmrc', 'appdata',
+  // Vault do Cérebro: dado de cliente fica local (nunca vai para modelo de nuvem).
+  'clientes', 'sessoes', 'processos',
+]);
+
+/** Caminho (em partes) que aponta para conteúdo protegido. */
+export function isProtectedPath(parts: readonly string[]): boolean {
+  const last = parts[parts.length - 1] ?? '';
+  return (
+    parts.some((part) => PROTECTED_DIRS.has(part.toLowerCase())) ||
+    /^\.env/i.test(last) ||
+    /^(?:docker-compose\.override\.ya?ml|id_(?:rsa|ed25519|ecdsa)\b.*|.*\.(?:pem|key|p12|pfx|kdbx)|\.?npmrc|\.netrc|credentials(?:\.json)?|storage\.sqlite.*)$/i.test(last) ||
+    (/^settings(?:\.local)?\.json$/i.test(last) && parts.some((part) => part.toLowerCase() === 'profiles'))
+  );
+}
+
 export async function resolveWorkspaceFile(rootDir: string, relativePath: unknown): Promise<string> {
   if (
     typeof relativePath !== 'string' ||
@@ -36,12 +55,7 @@ export async function resolveWorkspaceFile(rootDir: string, relativePath: unknow
   }
   const parts = relativePath.split('/');
   if (parts.some((part) => part === '..')) throw new AgentToolError('O caminho está fora do workspace.');
-  if (
-    parts.some((part) => !part || part === '.') ||
-    parts.some((part) => ['.git', 'node_modules', '.env', '.claude', '.copilot'].includes(part.toLowerCase())) ||
-    /^\.env/i.test(parts[parts.length - 1]) ||
-    /^(?:docker-compose\.override\.ya?ml|.*\.(?:pem|key|p12|pfx))$/i.test(parts[parts.length - 1])
-  ) {
+  if (parts.some((part) => !part || part === '.') || isProtectedPath(parts)) {
     throw new AgentToolError('O caminho é inválido ou aponta para conteúdo local protegido.');
   }
   const root = await realpath(rootDir);
@@ -85,13 +99,68 @@ export interface PreparedWrite {
   oldContent: string;
   newContent: string;
   expectedHash: string;
+  /** Arquivo novo: a escrita usa O_EXCL (falha se alguém criar o arquivo enquanto aguardava aprovação). */
+  create?: boolean;
+}
+
+/**
+ * Caminho de um arquivo NOVO: as mesmas regras de resolveWorkspaceFile, a pasta-mãe tem de existir dentro do
+ * workspace (sem symlinks no caminho) e o arquivo não pode existir.
+ */
+export async function resolveNewWorkspaceFile(rootDir: string, relativePath: unknown): Promise<string> {
+  if (typeof relativePath !== 'string' || !relativePath.trim() || relativePath.includes('\0') || relativePath.includes('\\') || isAbsolute(relativePath)) {
+    throw new AgentToolError('O caminho deve ser relativo e não vazio.');
+  }
+  const parts = relativePath.split('/');
+  if (parts.some((part) => part === '..')) throw new AgentToolError('O caminho está fora do workspace.');
+  if (parts.some((part) => !part || part === '.') || isProtectedPath(parts)) {
+    throw new AgentToolError('O caminho é inválido ou aponta para conteúdo local protegido.');
+  }
+  const root = await realpath(rootDir);
+  const candidate = resolve(root, relativePath);
+  if (!isWithin(root, candidate) || candidate === root) throw new AgentToolError('O caminho está fora do workspace.');
+  let current = root;
+  const dirs = relative(root, candidate).split(sep).slice(0, -1);
+  for (const part of dirs) {
+    current = resolve(current, part);
+    let stat;
+    try {
+      stat = await lstat(current);
+    } catch {
+      throw new AgentToolError('A pasta do novo arquivo não existe; crie arquivos só em pastas existentes.');
+    }
+    if (stat.isSymbolicLink()) throw new AgentToolError('Acesso a symlinks não é permitido pelas ferramentas do agente.');
+    if (!stat.isDirectory()) throw new AgentToolError('O caminho do novo arquivo passa por algo que não é pasta.');
+  }
+  if ((await realpath(current)) !== current) throw new AgentToolError('O caminho canônico está fora do workspace.');
+  try {
+    await lstat(candidate);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return candidate;
+    throw error;
+  }
+  throw new AgentToolError('O arquivo já existe.');
 }
 
 export async function prepareWorkspaceWrite(rootDir: string, relativePath: unknown, content: unknown): Promise<PreparedWrite> {
   if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_FILE_BYTES || content.includes('\0')) {
     throw new AgentToolError('O conteúdo deve ser texto com no máximo 128 KiB.');
   }
-  const path = await resolveWorkspaceFile(rootDir, relativePath);
+  let path: string;
+  try {
+    path = await resolveWorkspaceFile(rootDir, relativePath);
+  } catch (error) {
+    if (!(error instanceof AgentToolError) || error.message !== 'O arquivo solicitado não existe.') throw error;
+    const created = await resolveNewWorkspaceFile(rootDir, relativePath);
+    return {
+      path: created,
+      relativePath: relative(await realpath(rootDir), created).split(sep).join('/'),
+      oldContent: '',
+      newContent: content,
+      expectedHash: '',
+      create: true,
+    };
+  }
   if ((await lstat(path)).size > MAX_FILE_BYTES) throw new AgentToolError('O arquivo atual excede o limite de escrita de 128 KiB.');
   const oldBytes = await readFile(path);
   if (oldBytes.byteLength > MAX_FILE_BYTES || oldBytes.includes(0)) throw new AgentToolError('O arquivo atual não é um arquivo de texto editável.');
@@ -105,6 +174,17 @@ export async function prepareWorkspaceWrite(rootDir: string, relativePath: unkno
 }
 
 export async function applyWorkspaceWrite(rootDir: string, write: PreparedWrite): Promise<void> {
+  if (write.create) {
+    const target = await resolveNewWorkspaceFile(rootDir, write.relativePath);
+    if (target !== write.path) throw new AgentToolError('O caminho do arquivo mudou enquanto aguardava aprovação.');
+    const created = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o644);
+    try {
+      await created.writeFile(write.newContent, 'utf8');
+    } finally {
+      await created.close();
+    }
+    return;
+  }
   const path = await resolveWorkspaceFile(rootDir, write.relativePath);
   if (path !== write.path) throw new AgentToolError('O caminho do arquivo mudou enquanto aguardava aprovação.');
   const handle = await open(path, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0));
@@ -198,4 +278,140 @@ export async function runApprovedCheck(rootDir: string, check: unknown, signal: 
 
 export function newApprovalId(): string {
   return randomBytes(24).toString('base64url');
+}
+
+// ---------------------------------------------------------------------------------------------
+// Leitura em lote (somente leitura, com limites): listar e buscar sem o agente adivinhar caminhos
+// ---------------------------------------------------------------------------------------------
+
+const SKIP_DIRS = new Set(['dist', 'build', 'out', 'coverage', '.next', '.cache', '.turbo']);
+const LIST_LIMIT = 300;
+const SEARCH_MAX_FILES = 3_000;
+const SEARCH_MAX_MATCHES = 60;
+
+/** Caminhos (com '/') dentro do workspace, em largura, sem symlinks nem conteúdo protegido. */
+async function* walkWorkspace(root: string, start: string, maxDepth: number): AsyncGenerator<{ rel: string; dir: boolean }> {
+  const queue: Array<{ abs: string; rel: string; depth: number }> = [{ abs: resolve(root, start), rel: start, depth: 0 }];
+  while (queue.length) {
+    const { abs, rel, depth } = queue.shift()!;
+    let entries;
+    try {
+      entries = await readdir(abs, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of entries) {
+      if (e.isSymbolicLink()) continue;
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (isProtectedPath(childRel.split('/'))) continue;
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) continue;
+        yield { rel: childRel, dir: true };
+        if (depth + 1 < maxDepth) queue.push({ abs: resolve(abs, e.name), rel: childRel, depth: depth + 1 });
+      } else if (e.isFile()) {
+        yield { rel: childRel, dir: false };
+      }
+    }
+  }
+}
+
+/** Valida a pasta inicial de uma listagem/busca ('' = raiz do workspace). */
+async function startDir(rootDir: string, dir: unknown): Promise<{ root: string; start: string }> {
+  const root = await realpath(rootDir);
+  if (dir === undefined || dir === '' || dir === '.') return { root, start: '' };
+  if (typeof dir !== 'string' || dir.includes('\0') || dir.includes('\\') || isAbsolute(dir)) throw new AgentToolError('A pasta deve ser um caminho relativo.');
+  const parts = dir.replace(/\/+$/, '').split('/');
+  if (parts.some((p) => !p || p === '.' || p === '..') || isProtectedPath(parts)) throw new AgentToolError('A pasta é inválida ou protegida.');
+  const abs = resolve(root, ...parts);
+  if (!isWithin(root, abs)) throw new AgentToolError('A pasta está fora do workspace.');
+  let current = root;
+  for (const p of parts) {
+    current = resolve(current, p);
+    const st = await lstat(current).catch(() => undefined);
+    if (!st) throw new AgentToolError('A pasta não existe.');
+    if (st.isSymbolicLink() || !st.isDirectory()) throw new AgentToolError('O caminho não é uma pasta comum.');
+  }
+  return { root, start: parts.join('/') };
+}
+
+/** Lista arquivos e pastas (pastas terminam em '/'), até 300 entradas e 4 níveis. */
+export async function listWorkspaceFiles(rootDir: string, dir?: unknown): Promise<string> {
+  const { root, start } = await startDir(rootDir, dir);
+  const out: string[] = [];
+  let more = false;
+  for await (const e of walkWorkspace(root, start, 4)) {
+    if (out.length >= LIST_LIMIT) {
+      more = true;
+      break;
+    }
+    out.push(e.dir ? `${e.rel}/` : e.rel);
+  }
+  if (!out.length) return 'Nenhum arquivo visível nesta pasta.';
+  return `${out.join('\n')}${more ? `\n[LISTA TRUNCADA em ${LIST_LIMIT} entradas; liste uma subpasta para ver mais.]` : ''}`;
+}
+
+/** Busca texto literal (sem diferenciar maiúsculas), até 60 ocorrências em até 3 000 arquivos de texto. */
+export async function searchWorkspaceText(rootDir: string, query: unknown, dir?: unknown): Promise<string> {
+  if (typeof query !== 'string' || query.trim().length < 2 || query.length > 200) throw new AgentToolError('A busca precisa de 2 a 200 caracteres.');
+  const needle = query.toLowerCase();
+  const { root, start } = await startDir(rootDir, dir);
+  const hits: string[] = [];
+  let files = 0;
+  for await (const e of walkWorkspace(root, start, 8)) {
+    if (e.dir) continue;
+    if (++files > SEARCH_MAX_FILES) break;
+    const abs = resolve(root, ...e.rel.split('/'));
+    const st = await lstat(abs).catch(() => undefined);
+    if (!st || !st.isFile() || st.size > MAX_FILE_BYTES) continue;
+    const data = await readFile(abs).catch(() => undefined);
+    if (!data || data.includes(0)) continue;
+    const lines = data.toString('utf8').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].toLowerCase().includes(needle)) continue;
+      hits.push(`${e.rel}:${i + 1}: ${lines[i].trim().slice(0, 200)}`);
+      if (hits.length >= SEARCH_MAX_MATCHES) {
+        return `${hits.join('\n')}\n[BUSCA TRUNCADA em ${SEARCH_MAX_MATCHES} ocorrências; refine o termo ou a pasta.]`;
+      }
+    }
+  }
+  const note = files > SEARCH_MAX_FILES ? `\n[Parou em ${SEARCH_MAX_FILES} arquivos; restrinja a pasta.]` : '';
+  return hits.length ? `${hits.join('\n')}${note}` : `Nada encontrado para "${query}".${note}`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Scripts do package.json de qualquer workspace (lista fixa de nomes; sempre com aprovação)
+// ---------------------------------------------------------------------------------------------
+
+export const PACKAGE_SCRIPTS = ['test', 'typecheck', 'lint', 'build'] as const;
+export type PackageScript = (typeof PACKAGE_SCRIPTS)[number];
+
+/** Scripts da lista fixa que este workspace tem no package.json. */
+export async function availablePackageScripts(rootDir: string): Promise<PackageScript[]> {
+  try {
+    const pkg = JSON.parse(await readFile(resolve(rootDir, 'package.json'), 'utf8')) as { scripts?: Record<string, unknown> };
+    return PACKAGE_SCRIPTS.filter((s) => typeof pkg.scripts?.[s] === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function npmCli(): string | undefined {
+  const bin = dirname(process.execPath);
+  for (const candidate of [resolve(bin, 'node_modules', 'npm', 'bin', 'npm-cli.js'), resolve(bin, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/** `npm run <script>` sem shell, com o mesmo ambiente mínimo e o limite de 120 s das verificações fixas. */
+export async function runPackageScript(rootDir: string, script: unknown, signal: AbortSignal): Promise<string> {
+  if (typeof script !== 'string' || !(PACKAGE_SCRIPTS as readonly string[]).includes(script)) {
+    throw new AgentToolError(`Script não autorizado. Use um destes: ${PACKAGE_SCRIPTS.join(', ')}.`);
+  }
+  if (!(await availablePackageScripts(rootDir)).includes(script as PackageScript)) throw new AgentToolError(`O package.json deste workspace não tem o script "${script}".`);
+  const cli = npmCli();
+  if (!cli) throw new AgentToolError('npm não encontrado junto do Node do Habblaud.');
+  const result = await runNode(rootDir, [cli, 'run', script], signal);
+  return [result.stdout, result.stderr].filter(Boolean).join('\n').slice(0, 16_000) || 'Script concluído sem saída.';
 }

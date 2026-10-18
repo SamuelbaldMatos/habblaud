@@ -243,8 +243,10 @@ export interface AccountUsage {
    * - 'statusline': capturado ao vivo e gravado em ~/.habblaud/usage/<conta>.json pelo mod do Habblaud
    *   (mod/habblaud, recomendado) ou pelo scripts/statusline-tap.mjs (campo rate_limits do statusline);
    * - 'cache': `cachedUsageUtilization` gravado pelo próprio Claude Code (atualiza quando alguém roda /usage).
+   * - 'omniroute': cota da assinatura Claude lida no OmniRoute (/api/usage/provider-limits), para as contas cujo
+   *   e-mail é o da conexão Claude do OmniRoute. Cobre o perfil que fala com o gateway, onde o mod não recebe limites.
    */
-  source: 'cache' | 'statusline';
+  source: 'cache' | 'statusline' | 'omniroute';
   /** Quem gravou o arquivo ao vivo ('statusline'): o mod do Habblaud no Claude Code ou o tap de statusline. */
   via?: 'mod' | 'tap';
   /** Quando os números foram obtidos na origem (epoch ms). */

@@ -252,6 +252,12 @@ describe('funções puras', () => {
     expect(usageDirOf(undefined, undefined)).toBeUndefined()
   })
 
+  test('Windows: USERPROFILE com barras invertidas', () => {
+    expect(configDirOf(undefined, 'C:\\Users\\f')).toBe('C:/Users/f/.claude')
+    expect(configDirOf('C:\\Users\\f\\.claude\\profiles\\omniroute', 'C:\\Users\\f')).toBe('C:/Users/f/.claude/profiles/omniroute')
+    expect(usageDirOf(undefined, 'C:\\Users\\f')).toBe('C:/Users/f/.habblaud/usage')
+  })
+
   test('janela: percentual limitado a 0–100, reinício em segundos; data inválida fica de fora', () => {
     expect(windowOf({ kind: 'five_hour', percentUsed: 101.5, resetsAt: '2026-10-06T14:00:00.400Z' })).toEqual({ utilization: 100, resets_at: SEC('2026-10-06T14:00:00Z') })
     expect(windowOf({ kind: 'five_hour', percentUsed: 7, resetsAt: 'amanhã' })).toEqual({ utilization: 7 })

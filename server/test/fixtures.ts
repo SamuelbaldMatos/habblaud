@@ -1,8 +1,9 @@
 // Construtores de linhas JSONL SINTÉTICAS no formato dos transcripts do Claude Code (para testes).
 // Nada aqui vem de conversas reais.
-import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 
 let n = 0;
 const uuid = () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
@@ -136,3 +137,47 @@ export function writeLines(path: string, lines: string[]): void {
 export function appendLines(path: string, lines: string[]): void {
   appendFileSync(path, lines.map((l) => `${l}\n`).join(''));
 }
+
+/**
+ * Shell POSIX em que o Claude Code roda os comandos de hook e de statusline: /bin/sh no macOS/Linux e o Git Bash
+ * no Windows (CLAUDE_CODE_GIT_BASH_PATH ou o bash que acompanha o git do PATH).
+ */
+export function posixShell(): string {
+  if (process.platform !== 'win32') return '/bin/sh';
+  const fromEnv = process.env.CLAUDE_CODE_GIT_BASH_PATH?.trim();
+  if (fromEnv && existsSync(fromEnv)) return fromEnv;
+  try {
+    const exec = execFileSync('git', ['--exec-path'], { encoding: 'utf8', windowsHide: true }).trim();
+    // <git>/mingw64/libexec/git-core -> <git>/bin/bash.exe
+    const bash = resolve(exec, '..', '..', '..', 'bin', 'bash.exe');
+    if (existsSync(bash)) return bash;
+  } catch {
+    // sem git no PATH: cai no bash do PATH
+  }
+  return 'bash';
+}
+
+/** PATH com a pasta do node atual na frente (separador do sistema). */
+export function pathWithNode(extra = process.env.PATH ?? ''): string {
+  return [dirname(process.execPath), extra].filter(Boolean).join(delimiter);
+}
+
+/** Bits de permissão POSIX existem? No Windows o modo é sempre 0o666/0o444 (só o atributo somente leitura). */
+export const POSIX_MODES = process.platform !== 'win32';
+
+/**
+ * Este sistema cria symlink de ARQUIVO sem privilégio? No Windows só com o Modo de Desenvolvedor ou como
+ * administrador; link de pasta funciona sempre como junction (`symlinkSync(alvo, link, 'junction')`).
+ */
+export const FILE_SYMLINKS: boolean = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'habblaud-link-'));
+  try {
+    writeFileSync(join(dir, 'a'), '');
+    symlinkSync(join(dir, 'a'), join(dir, 'b'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();

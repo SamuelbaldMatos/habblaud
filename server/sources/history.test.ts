@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentInfo } from '../../shared/types';
 import { setQuiet } from '../log';
-import { L, tempDir, writeLines } from '../test/fixtures';
+import { FILE_SYMLINKS, L, tempDir, writeLines } from '../test/fixtures';
 import { HEAD_BYTES, HISTORY_MAX_AGE_MS, isSessionId, openMainAgent, SessionHistory, TAIL_BYTES, type HistoryAccount } from './history';
 import { encodeCwd } from './watcher';
 
@@ -195,11 +195,12 @@ describe('SessionHistory.resolve', () => {
     session(c, '/p', sid(1), [L.prompt('oi')], NOW);
     const outside = join(root, 'fora.jsonl');
     writeFileSync(outside, `${L.prompt('segredo')}\n`);
-    symlinkSync(outside, join(c.dir, 'projects', encodeCwd('/p'), `${sid(2)}.jsonl`));
-    // Pasta de projeto que é um link para fora também não.
+    // Symlink de arquivo: no Windows só com privilégio (FILE_SYMLINKS); a pasta-link abaixo cobre o mesmo caso lá.
+    if (FILE_SYMLINKS) symlinkSync(outside, join(c.dir, 'projects', encodeCwd('/p'), `${sid(2)}.jsonl`));
+    // Pasta de projeto que é um link para fora também não ('junction' no Windows; ignorado no POSIX).
     mkdirSync(join(root, 'outra'), { recursive: true });
     writeFileSync(join(root, 'outra', `${sid(3)}.jsonl`), `${L.prompt('segredo')}\n`);
-    symlinkSync(join(root, 'outra'), join(c.dir, 'projects', 'link'));
+    symlinkSync(join(root, 'outra'), join(c.dir, 'projects', 'link'), 'junction');
     const h = history([c]);
     expect(h.resolve('.claude', sid(2))).toEqual({ status: 404, error: 'sessão não encontrada' });
     expect(h.resolve('.claude', sid(3))).toEqual({ status: 404, error: 'sessão não encontrada' });

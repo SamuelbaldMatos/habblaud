@@ -1,4 +1,5 @@
 // Funções puras de scripts/docker-up.ts (importar o módulo não sobe nada).
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DetectedAccount } from '../accounts/detect';
 import { legacyEnvWarning } from '../legacy';
@@ -34,15 +35,17 @@ describe('docker-up', () => {
   });
 
   it('monta só projects/ e sessions/ que existem', () => {
-    const dirs = ['/Users/fulano/.claude', '/Users/fulano/.claude-conta2'];
-    const exists = new Set(['/Users/fulano/.claude/projects', '/Users/fulano/.claude/sessions', '/Users/fulano/.claude-conta2/sessions']);
+    // Caminhos do host com o separador do sistema (o docker-up roda no host: macOS, Linux ou Windows).
+    const H = join('/Users', 'fulano');
+    const dirs = [join(H, '.claude'), join(H, '.claude-conta2')];
+    const exists = new Set([join(H, '.claude', 'projects'), join(H, '.claude', 'sessions'), join(H, '.claude-conta2', 'sessions')]);
     const mounts = planMounts(dirs, [acc('.claude'), acc('.claude-conta2')], (p) => (exists.has(p) ? `/real${p}` : undefined));
     expect(mounts.map((m) => m.binds)).toEqual([
       [
-        { source: '/real/Users/fulano/.claude/projects', target: '/claude/.claude/projects' },
-        { source: '/real/Users/fulano/.claude/sessions', target: '/claude/.claude/sessions' },
+        { source: `/real${join(H, '.claude', 'projects')}`, target: '/claude/.claude/projects' },
+        { source: `/real${join(H, '.claude', 'sessions')}`, target: '/claude/.claude/sessions' },
       ],
-      [{ source: '/real/Users/fulano/.claude-conta2/sessions', target: '/claude/.claude-conta2/sessions' }],
+      [{ source: `/real${join(H, '.claude-conta2', 'sessions')}`, target: '/claude/.claude-conta2/sessions' }],
     ]);
   });
 
@@ -60,7 +63,7 @@ describe('docker-up', () => {
   it('override: somente leitura, sem criar pastas no host, `$` escapado e a pasta do statusline em /usage', () => {
     const mounts = planMounts(['/Users/fu$lano/.claude'], [acc('.claude', { email: 'a@b.c', cachedUsage: { fetchedAtMs: 1, utilization: {} } })], (p) => p);
     const yml = renderOverride(mounts, new Date('2026-10-06T00:00:00Z'), '/Users/fulano/.habblaud/usage');
-    expect(yml).toContain('source: "/Users/fu$$lano/.claude/projects"');
+    expect(yml).toContain(`source: ${yamlString(join('/Users/fu$lano', '.claude', 'projects'))}`);
     expect(yml).toContain('HABBLAUD_USAGE_DIR: "/usage"');
     expect(yml).toContain('source: "/Users/fulano/.habblaud/usage"\n        target: "/usage"\n        read_only: true');
     const binds = yml.split('- type: bind').length - 1;

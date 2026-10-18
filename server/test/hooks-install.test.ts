@@ -20,7 +20,7 @@ import {
   STATUS_MESSAGE,
   type RunOptions,
 } from '../../scripts/hooks-install';
-import { tempDir } from './fixtures';
+import { POSIX_MODES, posixShell, tempDir } from './fixtures';
 
 const OPTS = { port: 4747, timeoutS: DEFAULT_TIMEOUT_S };
 
@@ -154,7 +154,7 @@ describe('hooks-install.ts (arquivos, HOME falso)', () => {
     expect(await exec('install')).toBe(0);
     const c = read('.claude');
     expect(c).toEqual({ ...original, hooks: { ...original.hooks, PermissionRequest: [{ matcher: '*', hooks: [expected] }] } });
-    expect(statSync(join(home, '.claude', 'settings.json')).mode & 0o777).toBe(0o644);
+    if (POSIX_MODES) expect(statSync(join(home, '.claude', 'settings.json')).mode & 0o777).toBe(0o644);
     expect(JSON.parse(readFileSync(join(home, '.claude', 'settings.json.habblaud-backup-20261008-093000'), 'utf8'))).toEqual(original);
     // Conta sem settings.json: cria um só com o hook (sem backup, não havia nada).
     expect(read('.claude-conta2')).toEqual({ hooks: { PermissionRequest: [{ matcher: '*', hooks: [expected] }] } });
@@ -172,7 +172,8 @@ describe('hooks-install.ts (arquivos, HOME falso)', () => {
     out = [];
     await exec('status', { port: 4851 }, { permissions: true });
     const text = out.join('\n');
-    expect(text).toMatch(/\.claude \(.*\): instalado \(.*permission-hook\.mjs" --port 4851; tempo limite 330 s\)/);
+    // Aspas duplas no POSIX; no Windows o caminho com barras invertidas vai entre aspas simples (Git Bash).
+    expect(text).toMatch(/\.claude \(.*\): instalado \(.*permission-hook\.mjs["'] --port 4851; tempo limite 330 s\)/);
     expect(text).toContain('Habblaud em http://127.0.0.1:4851: respondendo pedidos de permissão');
     out = [];
     await exec('status', { port: 4851 });
@@ -232,7 +233,7 @@ describe('hooks-install.ts (arquivos, HOME falso)', () => {
     const cmd: string = read('.claude').hooks.PermissionRequest[0].hooks[0].command;
     const input = JSON.stringify({ session_id: 's', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } });
     const t0 = Date.now();
-    const r = spawnSync('/bin/sh', ['-c', cmd], { input, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home }, timeout: 10_000 });
+    const r = spawnSync(posixShell(), ['-c', cmd], { input, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home }, timeout: 10_000 });
     expect(r.status).toBe(0);
     expect(r.stdout).toBe('');
     expect(Date.now() - t0).toBeLessThan(5_000);

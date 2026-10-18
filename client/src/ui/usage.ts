@@ -14,6 +14,7 @@ import { createAccountChip, updateAccountChip } from './widgets';
 export const SOURCE_LABEL: Record<NonNullable<AccountInfo['usage']>['source'], string> = {
   cache: 'cache do /usage do Claude Code',
   statusline: 'ao vivo (statusline do Claude Code)',
+  omniroute: 'OmniRoute (cota da assinatura, a cada 2 min)',
 };
 
 /** Origem para mostrar: o arquivo ao vivo pode ter sido gravado pelo mod do Habblaud ou pelo tap. */
@@ -286,7 +287,7 @@ export class UsageCards {
     setText(r.tipNote, note);
     setHidden(r.tipNote, !note);
     // O passo a passo aparece sempre que os números não são ao vivo.
-    const live = u?.source === 'statusline' && state === 'ok';
+    const live = (u?.source === 'statusline' || u?.source === 'omniroute') && state === 'ok';
     setHidden(r.tipSetup, live);
   }
 }

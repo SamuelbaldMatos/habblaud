@@ -24,6 +24,7 @@
     "start": "node dist/server/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
     "test": "vitest run",
+    "test:docker": "docker exec habblaud node node_modules/vitest/vitest.mjs run",
     "docker:up": "tsx scripts/docker-up.ts",
     "docker:down": "tsx scripts/docker-up.ts --down",
     "docker:logs": "docker compose logs -f habblaud",

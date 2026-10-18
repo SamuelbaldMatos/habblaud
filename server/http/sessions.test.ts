@@ -13,7 +13,7 @@ import { NameStore } from '../model/names';
 import { Office } from '../model/office';
 import { openMainAgent, SessionHistory } from '../sources/history';
 import { encodeCwd } from '../sources/watcher';
-import { appendLines, L, tempDir, writeLines } from '../test/fixtures';
+import { appendLines, FILE_SYMLINKS, L, tempDir, writeLines } from '../test/fixtures';
 import { createApiHandler } from './app';
 import { createRequestGuard } from './guard';
 import { Hub } from './sse';
@@ -239,7 +239,14 @@ describe('histórico de sessões: validação (path traversal)', () => {
       }
       // Link dentro de projects/ apontando para fora: 404.
       const linked = '00000000-0000-4000-8000-0000000000c3';
-      symlinkSync(join(env.root, 'segredo.jsonl'), join(env.dir, 'projects', encodeCwd(CWD), `${linked}.jsonl`));
+      if (FILE_SYMLINKS) {
+        symlinkSync(join(env.root, 'segredo.jsonl'), join(env.dir, 'projects', encodeCwd(CWD), `${linked}.jsonl`));
+      } else {
+        // Windows sem privilégio de symlink de arquivo: o mesmo ataque por uma pasta-link (junction) para fora.
+        mkdirSync(join(env.root, 'fora'), { recursive: true });
+        writeFileSync(join(env.root, 'fora', `${linked}.jsonl`), `${L.prompt('não pode sair')}\n`);
+        symlinkSync(join(env.root, 'fora'), join(env.dir, 'projects', 'link-fora'), 'junction');
+      }
       mkdirSync(join(env.dir, 'projects', 'vazio'), { recursive: true });
       const r = await request(env.base, terminalRoute('.claude', linked));
       expect(r.status).toBe(404);

@@ -1,4 +1,5 @@
 // Compositor compacto do Chat OmniRoute, com conversa e atividade expansíveis sob demanda.
+import { OMNIROUTE_COMBO_OPTIONS } from '../../../shared/omniroute-combos';
 import type { UiComponent, UiContext } from './context';
 import { copyText, h, iconButton, setAttr, setHidden, setText } from './dom';
 import { ICONS } from './icons';
@@ -21,20 +22,7 @@ export interface ChatMsg {
   jobId?: string;
 }
 
-const COMBOS = [
-  { id: 'orquestrador', label: '🧠 orquestrador · Multiagente' },
-  { id: 'codigo', label: '💻 codigo · Programação' },
-  { id: 'codigo-pesado', label: '🚀 codigo-pesado · Refatoração profunda' },
-  { id: 'revisor', label: '🔬 revisor · Revisão de código' },
-  { id: 'seguranca', label: '🛡️ seguranca · Análise de risco' },
-  { id: 'rapido', label: '⚡ rapido · Tarefas ágeis' },
-  { id: 'texto', label: '💬 texto · Redação PT-BR' },
-  { id: 'analise', label: '📊 analise · Dados e SQL' },
-  { id: 'contexto-longo', label: '📚 contexto-longo · Contexto longo' },
-  { id: 'complexo', label: '🏛️ complexo · Claude Opus' },
-  { id: 'maximo', label: '🚀 maximo · Consulta difícil (Claude)' },
-  { id: 'local-privado', label: '🔒 local-privado · Ollama Local' },
-] as const;
+export const COMBOS = OMNIROUTE_COMBO_OPTIONS;
 
 export class OmniChatPanel implements UiComponent {
   readonly el: HTMLElement;

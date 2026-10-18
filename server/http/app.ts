@@ -6,6 +6,7 @@ import type { DayStatsService } from '../history/daystats';
 import type { Office } from '../model/office';
 import type { SessionHistory } from '../sources/history';
 import type { VscodeActivitySource } from '../sources/vscode';
+import type { DelegationSource } from '../sources/delegations';
 import { isJsonContentType, isLoopbackAddress, isLoopbackHost } from './guard';
 import { handleSessionsRoute } from './sessions';
 import type { Hub } from './sse';
@@ -44,6 +45,8 @@ export interface ApiDeps {
   theme?: { get(): OfficeTheme; set(theme: OfficeTheme): void };
   /** Recebe somente metadados filtrados de hooks locais do VS Code. */
   vscode?: VscodeActivitySource;
+  /** Delegações do OmniRoute (tarefa → combo de outra provedora) que aparecem como agentes no escritório. */
+  delegations?: DelegationSource;
   /** Rotas do chat e combos do OmniRoute (/api/omniroute/*). */
   omniroute?: (req: IncomingMessage, res: ServerResponse, path: string) => boolean;
 }
@@ -220,6 +223,23 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           })
           .catch((err) => fail(res, err));
       } else methodNotAllowed(res, 'GET, POST');
+      return true;
+    }
+    if (path === '/api/delegations') {
+      if (method !== 'POST') methodNotAllowed(res, 'POST');
+      else if (!deps.delegations) sendJson(res, 404, { error: 'delegações indisponíveis' });
+      else if (!isLoopbackHost(req.headers.host) || (!deps.inDocker && !isLoopbackAddress(req.socket.remoteAddress))) {
+        req.resume();
+        sendJson(res, 403, { error: 'delegações só aceitam conexões locais' });
+      } else {
+        readJson(req)
+          .then((body) => {
+            const result = deps.delegations?.record(body);
+            if (!result?.ok) throw new HttpError(400, result?.error ?? 'delegação inválida');
+            sendJson(res, 202, { ok: true });
+          })
+          .catch((err) => fail(res, err));
+      }
       return true;
     }
     if (path === '/api/vscode/activity') {

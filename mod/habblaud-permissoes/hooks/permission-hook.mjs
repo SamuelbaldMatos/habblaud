@@ -24,6 +24,7 @@
 //
 // Regras: Node puro (22+), sem dependências; nunca trava nem quebra a sessão (todo erro = sair sem
 // decidir). Só fala com 127.0.0.1. HABBLAUD_HOOK_DEBUG=1 escreve o que acontece no stderr.
+import { request as httpRequest } from 'node:http';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -113,6 +114,8 @@ function readStdin() {
     let size = 0;
     const finish = (text) => {
       clearTimeout(timer);
+      // Sem process.exit no fim: um stdin ainda aberto manteria o processo vivo.
+      process.stdin.pause();
       ok(text);
     };
     const timer = setTimeout(() => finish(undefined), STDIN_TIMEOUT_MS);
@@ -127,26 +130,49 @@ function readStdin() {
 }
 
 /** Requisição ao Habblaud local; null = fora do ar, tempo esgotado ou resposta ilegível. */
-async function call(base, method, path, body, timeoutMs) {
-  try {
-    const res = await fetch(`${base}${path}`, {
+// node:http sem keep-alive (agent: false), e não fetch: o socket fecha junto com a resposta e o processo termina
+// sozinho. Com fetch, sair por process.exit enquanto o undici fecha o socket derruba o Node no Windows
+// ("Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)", código 0xC0000409) e o Claude Code descarta a decisão.
+function call(base, method, path, body, timeoutMs) {
+  return new Promise((resolve) => {
+    const payload = body === undefined ? undefined : JSON.stringify(body);
+    let settled = false;
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const req = httpRequest(`${base}${path}`, {
       method,
-      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
+      agent: false,
+      headers: payload === undefined ? {} : { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('error', () => done(null));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        let json;
+        try {
+          json = text ? JSON.parse(text) : undefined;
+        } catch {
+          json = undefined;
+        }
+        done({ status: res.statusCode ?? 0, json });
+      });
     });
-    const text = await res.text();
-    let json;
-    try {
-      json = text ? JSON.parse(text) : undefined;
-    } catch {
-      json = undefined;
-    }
-    return { status: res.status, json };
-  } catch (err) {
-    debug(`${method} ${path}: ${err?.name ?? 'erro'} ${err?.message ?? ''}`);
-    return null;
-  }
+    const timer = setTimeout(() => {
+      debug(`${method} ${path}: tempo esgotado`);
+      req.destroy();
+      done(null);
+    }, timeoutMs);
+    req.on('error', (err) => {
+      debug(`${method} ${path}: ${err?.name ?? 'erro'} ${err?.message ?? ''}`);
+      done(null);
+    });
+    req.end(payload);
+  });
 }
 
 /** Decide o pedido (ou não). Devolve a saída a imprimir, ou undefined. Nunca lança. */
@@ -199,9 +225,9 @@ export async function main() {
   // Rede de segurança: nada mantém o processo vivo além do tempo limite.
   setTimeout(() => process.exit(0), timeoutMs + 15_000).unref();
   const out = await run();
-  // Pipes são assíncronos no macOS: só sai depois que a decisão foi escrita.
-  if (out) process.stdout.write(`${JSON.stringify(out)}\n`, () => process.exit(0));
-  else process.exit(0);
+  // Sai sozinho (sem process.exit): o stdout termina de escrever e nenhum socket fica aberto (agent: false).
+  process.exitCode = 0;
+  if (out) process.stdout.write(`${JSON.stringify(out)}\n`);
 }
 
 function isMain() {

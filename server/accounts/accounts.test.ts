@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { setQuiet } from '../log';
 import { tempDir } from '../test/fixtures';
@@ -26,21 +26,21 @@ describe('aliases de shell', () => {
       "alias w='cd ~/.claude && ls'",
     ].join('\n');
     expect(parseClaudeAliases(rc, H)).toEqual([
-      { name: 'claude2', configDir: `${H}/.claude-conta2` },
+      { name: 'claude2', configDir: resolve(H, '.claude-conta2') },
       { name: 'c' },
       { name: 'f' },
-      { name: 'd', configDir: `${H}/.claude-conta2` },
-      { name: 'e', configDir: `${H}/.claude-trabalho` },
+      { name: 'd', configDir: resolve(H, '.claude-conta2') },
+      { name: 'e', configDir: resolve(H, '.claude-trabalho') },
     ]);
   });
 
   it('prefere o alias mais curto (empate: o primeiro) e usa maiúscula', () => {
     const m = shortcutsByDir(
-      [{ name: 'claude2', configDir: `${H}/.claude-conta2` }, { name: 'c' }, { name: 'f' }, { name: 'd', configDir: `${H}/.claude-conta2` }],
+      [{ name: 'claude2', configDir: resolve(H, '.claude-conta2') }, { name: 'c' }, { name: 'f' }, { name: 'd', configDir: resolve(H, '.claude-conta2') }],
       H,
     );
-    expect(m.get(`${H}/.claude`)).toBe('C');
-    expect(m.get(`${H}/.claude-conta2`)).toBe('D');
+    expect(m.get(resolve(H, '.claude'))).toBe('C');
+    expect(m.get(resolve(H, '.claude-conta2'))).toBe('D');
   });
 
   it('ids desambiguados quando dois dirs têm o mesmo basename', () => {
@@ -70,7 +70,7 @@ describe('detecção de contas', () => {
     const extra = join(home, 'outra');
     mkdirSync(extra);
     expect(discoverClaudeDirs({ CLAUDE_CONFIG_DIR: extra }, home)).toContain(extra);
-    expect(discoverClaudeDirs({ HABBLAUD_CLAUDE_DIRS: ' /x/a , ~/b ' }, home)).toEqual(['/x/a', join(home, 'b')]);
+    expect(discoverClaudeDirs({ HABBLAUD_CLAUDE_DIRS: ' /x/a , ~/b ' }, home)).toEqual([resolve('/x/a'), join(home, 'b')]);
   });
 
   it('lê só os campos permitidos do .claude.json, atalhos e cores', () => {

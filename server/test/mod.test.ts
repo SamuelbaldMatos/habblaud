@@ -5,6 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pathWithNode, posixShell } from './fixtures';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TIMEOUT_S, hookCommand, hookEntry, STATUS_MESSAGE } from '../../scripts/hooks-install';
 
@@ -112,10 +113,10 @@ describe('plugin habblaud-permissoes', () => {
     const input = JSON.stringify({ session_id: 's', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } });
     const t0 = Date.now();
     // O Claude Code troca ${CLAUDE_PLUGIN_ROOT} no comando e também o exporta; o sh expande do ambiente igual.
-    const r = spawnSync('/bin/sh', ['-c', String(hooks[0]?.hook.command)], {
+    const r = spawnSync(posixShell(), ['-c', String(hooks[0]?.hook.command)], {
       input,
       encoding: 'utf8',
-      env: { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ''}`, CLAUDE_PLUGIN_ROOT: dir, HABBLAUD_PORT: '1' },
+      env: { PATH: pathWithNode(), CLAUDE_PLUGIN_ROOT: dir, HABBLAUD_PORT: '1' },
       timeout: 10_000,
     });
     expect(r.status).toBe(0);
