@@ -1,6 +1,6 @@
 import type { ActivityKind } from '../../../shared/types';
 import type { HeldItem, Pose } from '../art/api';
-import type { OfficeTheme } from './api';
+import type { DecorTheme } from './api';
 import type { Character } from './sim/character';
 
 export type ThemeEffect = 'magic' | 'dragon' | 'shadow' | 'bat' | 'hologram' | 'drone';
@@ -13,7 +13,7 @@ export interface ThemeActivityVisual {
 }
 
 export interface ThemeVisualProfile {
-  id: OfficeTheme;
+  id: DecorTheme;
   work: Partial<Record<ActivityKind, ThemeActivityVisual>>;
   defaultWork: ThemeActivityVisual;
   social: Partial<Record<Pose, ThemeActivityVisual>>;
@@ -23,7 +23,7 @@ const reading = new Set<ActivityKind>(['edit', 'write', 'think', 'read', 'respon
 const running = new Set<ActivityKind>(['run', 'test', 'git']);
 const communicating = new Set<ActivityKind>(['communicate', 'ask', 'prompt', 'delegate']);
 
-function workMap(theme: Exclude<OfficeTheme, 'original'>): ThemeVisualProfile['work'] {
+function workMap(theme: Exclude<DecorTheme, 'original'>): ThemeVisualProfile['work'] {
   const out: ThemeVisualProfile['work'] = {};
   for (const kind of reading) {
     out[kind] = theme === 'medieval'
@@ -49,7 +49,7 @@ function workMap(theme: Exclude<OfficeTheme, 'original'>): ThemeVisualProfile['w
   return out;
 }
 
-export const THEME_VISUAL_PROFILES: Readonly<Record<OfficeTheme, ThemeVisualProfile>> = {
+export const THEME_VISUAL_PROFILES: Readonly<Record<DecorTheme, ThemeVisualProfile>> = {
   original: { id: 'original', work: {}, defaultWork: {}, social: {} },
   medieval: {
     id: 'medieval',
@@ -71,7 +71,7 @@ export const THEME_VISUAL_PROFILES: Readonly<Record<OfficeTheme, ThemeVisualProf
   },
 };
 
-export function visualForCharacter(theme: OfficeTheme, ch: Character): ThemeActivityVisual | null {
+export function visualForCharacter(theme: DecorTheme, ch: Character): ThemeActivityVisual | null {
   if (theme === 'original') return null;
   const profile = THEME_VISUAL_PROFILES[theme];
   if (ch.pose === 'sleep' || ch.pose === 'wait') return null;

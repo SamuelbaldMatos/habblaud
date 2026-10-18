@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync, rmSync, existsSy
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 let n = 0;
 const uuid = () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
@@ -123,6 +124,35 @@ export const L = {
   },
 };
 
+/** O sistema guarda os bits de permissão do POSIX? No Windows, o stat devolve 0o666 (ou 0o444, se só leitura). */
+export const HAS_POSIX_MODES = process.platform !== 'win32';
+
+/** Funções do tap de statusline (JavaScript puro, sem tipos). */
+const { originalShell } = (await import(pathToFileURL(resolve(__dirname, '../../scripts/statusline-tap.mjs')).href)) as { originalShell: () => string | true };
+
+/**
+ * Shell em que o Claude Code roda os comandos de hooks e de statusline, para rodar o comando instalado de verdade:
+ * /bin/sh; no Windows, o Git Bash (o mesmo que o tap acha). undefined = Windows sem Git Bash (o teste é pulado).
+ */
+export function posixShell(): string | undefined {
+  if (process.platform !== 'win32') return '/bin/sh';
+  const sh = originalShell();
+  return typeof sh === 'string' ? sh : undefined;
+}
+
+/**
+ * symlinkSync de arquivo, ou pula o resto do teste quando o sistema não deixa criar o link: no Windows, isso pede o
+ * Modo de Desenvolvedor ou administrador (EPERM). Link de pasta: `'junction'`, que no Windows não pede nada.
+ */
+export function symlinkOrSkip(skip: (note: string) => never, target: string, path: string): void {
+  try {
+    symlinkSync(target, path);
+  } catch (err) {
+    if (process.platform === 'win32' && (err as NodeJS.ErrnoException).code === 'EPERM') skip('o Windows não deixou criar o link (Modo de Desenvolvedor desligado)');
+    throw err;
+  }
+}
+
 /** Pasta temporária para um teste (apagada com `cleanup`). */
 export function tempDir(prefix = 'habblaud-'): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -138,24 +168,6 @@ export function appendLines(path: string, lines: string[]): void {
   appendFileSync(path, lines.map((l) => `${l}\n`).join(''));
 }
 
-/**
- * Shell POSIX em que o Claude Code roda os comandos de hook e de statusline: /bin/sh no macOS/Linux e o Git Bash
- * no Windows (CLAUDE_CODE_GIT_BASH_PATH ou o bash que acompanha o git do PATH).
- */
-export function posixShell(): string {
-  if (process.platform !== 'win32') return '/bin/sh';
-  const fromEnv = process.env.CLAUDE_CODE_GIT_BASH_PATH?.trim();
-  if (fromEnv && existsSync(fromEnv)) return fromEnv;
-  try {
-    const exec = execFileSync('git', ['--exec-path'], { encoding: 'utf8', windowsHide: true }).trim();
-    // <git>/mingw64/libexec/git-core -> <git>/bin/bash.exe
-    const bash = resolve(exec, '..', '..', '..', 'bin', 'bash.exe');
-    if (existsSync(bash)) return bash;
-  } catch {
-    // sem git no PATH: cai no bash do PATH
-  }
-  return 'bash';
-}
 
 /** PATH com a pasta do node atual na frente (separador do sistema). */
 export function pathWithNode(extra = process.env.PATH ?? ''): string {
@@ -163,7 +175,7 @@ export function pathWithNode(extra = process.env.PATH ?? ''): string {
 }
 
 /** Bits de permissão POSIX existem? No Windows o modo é sempre 0o666/0o444 (só o atributo somente leitura). */
-export const POSIX_MODES = process.platform !== 'win32';
+export const POSIX_MODES = HAS_POSIX_MODES;
 
 /**
  * Este sistema cria symlink de ARQUIVO sem privilégio? No Windows só com o Modo de Desenvolvedor ou como

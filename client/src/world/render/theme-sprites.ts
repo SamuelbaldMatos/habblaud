@@ -1,4 +1,4 @@
-import type { OfficeTheme } from '../api';
+import type { DecorTheme } from '../api';
 import type { ThemeEffect } from '../themes';
 
 export interface ThemeFrameSprite { canvas: HTMLCanvasElement; ax: number; ay: number }
@@ -168,7 +168,7 @@ function drawDrone(ctx: CanvasRenderingContext2D, f: number): void {
 }
 
 /** Cada chamada retorna um quadro estático pronto; o renderer apenas alterna os quadros. */
-export function themeEffectSprite(theme: OfficeTheme, effect: ThemeEffect, frame: number): ThemeFrameSprite {
+export function themeEffectSprite(theme: DecorTheme, effect: ThemeEffect, frame: number): ThemeFrameSprite {
   const f = ((Math.floor(frame) % FRAME_COUNT[effect]) + FRAME_COUNT[effect]) % FRAME_COUNT[effect];
   const key = `${theme}:${effect}:${f}`;
   const hit = cache.get(key);

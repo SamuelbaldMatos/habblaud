@@ -3,6 +3,7 @@
 // Tudo é desenhado em código: a geração acontece em PixelBuf (puro, testável em Node) e só no fim
 // vira canvas, uma única vez por combinação de parâmetros (cache). As funções draw* chamadas a cada
 // quadro (telas, quadro, janela, relógio, pisos, paredes) só fazem fillRect/drawImage de tiles prontos.
+import { partsKey, type AppearanceParts } from '../../../shared/appearance';
 import { hash32 } from '../../../shared/hash';
 import {
   TILE,
@@ -32,14 +33,15 @@ import { CHUNK_PX, floorChunk } from './surfaces/floor';
 import { WALL_CAP_H, WALL_FACE_H, capColor, southWallTile, wallFaceTile } from './surfaces/walls';
 import { renderRug } from './surfaces/rug';
 import { roomTheme as roomThemePure } from './theme';
-import type { OfficeTheme } from '../world/api';
+import type { DecorTheme } from '../world/api';
 
 export * from './api';
 export { hash32 };
 export { drawBoard, drawClock, drawScreen, drawWindowView, footballLance };
+export { editorConflict, editorOptions, fitToOptions, type EditorOptions } from './character/appearance';
 
-let officeTheme: OfficeTheme = 'original';
-export function setOfficeTheme(theme: OfficeTheme): void {
+let officeTheme: DecorTheme = 'original';
+export function setOfficeTheme(theme: DecorTheme): void {
   officeTheme = theme;
 }
 
@@ -66,7 +68,7 @@ function insideDynamicRect(s: BufSprite, x: number, y: number): boolean {
 /** Recolore o sprite existente sem mudar âncora, footprint, estados ou regiões interativas. */
 function themeFurniture(s: BufSprite, kind: FurnitureKind): void {
   if (officeTheme === 'original' || NATURAL_FURNITURE.has(kind)) return;
-  const ramps: Record<Exclude<OfficeTheme, 'original'>, readonly [number, number, number][]> = {
+  const ramps: Record<Exclude<DecorTheme, 'original'>, readonly [number, number, number][]> = {
     medieval: [[35, 24, 18], [91, 57, 31], [151, 102, 48], [222, 181, 83]],
     horror: [[8, 8, 10], [29, 26, 30], [70, 55, 58], [126, 103, 96]],
     alien: [[7, 22, 35], [20, 60, 82], [53, 132, 151], [92, 244, 218]],
@@ -208,7 +210,7 @@ function keyOf(a: Appearance): string {
 
 // ------------------------------------------------------------------ personagens
 
-export function appearanceFromSeed(seed: number, opts: { look?: 'f' | 'm'; sub?: boolean } = {}): Appearance {
+export function appearanceFromSeed(seed: number, opts: { look?: 'f' | 'm'; sub?: boolean; parts?: AppearanceParts } = {}): Appearance {
   return appearanceFromSeedPure(seed, opts);
 }
 
@@ -224,15 +226,15 @@ export function characterSprite(req: CharacterFrameRequest): Sprite {
   const n = poseFrameCount(req.pose);
   const frame = ((Math.floor(req.frame) % n) + n) % n;
   const seated = isSeated(req.pose, req.seated);
-  const key = `${officeTheme}|${keyOf(req.appearance)}|${req.dir}|${req.pose}|${frame}|${req.held ?? 'none'}|${seated ? 1 : 0}`;
-  return charCache.get(key, () => {
-    return toSprite(renderThemedCharacter({ ...req, frame, seated }, officeTheme, hash32(keyOf(req.appearance))));
-  });
+  const key = `${officeTheme}|${keyOf(req.appearance)}|${req.dir}|${req.pose}|${frame}|${req.held ?? 'none'}|${seated ? 1 : 0}|${req.costume ?? 'none'}`;
+  return charCache.get(key, () =>
+    toSprite(renderThemedCharacter({ ...req, frame, seated }, officeTheme, hash32(keyOf(req.appearance)))),
+  );
 }
 
-export function avatarCanvas(seed: number, opts: { look?: 'f' | 'm'; sub?: boolean; scale?: number } = {}): HTMLCanvasElement {
+export function avatarCanvas(seed: number, opts: { look?: 'f' | 'm'; sub?: boolean; scale?: number; parts?: AppearanceParts } = {}): HTMLCanvasElement {
   const scale = Math.max(1, Math.round(opts.scale ?? 3));
-  const key = `${officeTheme}|${seed}|${opts.look ?? '-'}|${opts.sub ? 1 : 0}|${scale}`;
+  const key = `${officeTheme}|${seed}|${opts.look ?? '-'}|${opts.sub ? 1 : 0}|${scale}|${partsKey(opts.parts)}`;
   return avatarCache.get(key, () => {
     const s = renderThemedCharacter({ appearance: appearanceFromSeedPure(seed, opts), dir: 'down', pose: 'stand', frame: 0 }, officeTheme, seed);
     // Busto: cabeça + ombros (20x20 a partir do topo do cabelo).

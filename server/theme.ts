@@ -4,14 +4,14 @@ import { dirname } from 'node:path';
 import { errMsg, log } from './log';
 
 export const OFFICE_THEMES = ['original', 'medieval', 'horror', 'alien'] as const;
-export type OfficeTheme = (typeof OFFICE_THEMES)[number];
+export type DecorTheme = (typeof OFFICE_THEMES)[number];
 
-export function isOfficeTheme(value: unknown): value is OfficeTheme {
+export function isOfficeTheme(value: unknown): value is DecorTheme {
   return typeof value === 'string' && (OFFICE_THEMES as readonly string[]).includes(value);
 }
 
 export class ThemeStore {
-  private value: OfficeTheme = 'original';
+  private value: DecorTheme = 'original';
 
   constructor(private readonly file: string | null) {}
 
@@ -25,11 +25,11 @@ export class ThemeStore {
     }
   }
 
-  get(): OfficeTheme {
+  get(): DecorTheme {
     return this.value;
   }
 
-  set(theme: OfficeTheme): void {
+  set(theme: DecorTheme): void {
     if (theme === this.value) return;
     this.value = theme;
     if (!this.file) return;

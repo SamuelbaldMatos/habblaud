@@ -76,6 +76,6 @@ describe('demo-timeline', () => {
     expect(() => generateDemoTimeline(opts)).toThrow(/já existe/);
     const again = generateDemoTimeline({ ...opts, force: true });
     expect(readFileSync(again.files[0], 'utf8')).toBe(readFileSync(file, 'utf8'));
-    // Simula 3 h de escritório duas vezes (~3 s numa máquina livre): com a suíte inteira em paralelo, 5 s não bastam.
+    // Duas gravações de 3 h simuladas, uma linha por vez: no Windows e com testes paralelos passam dos 5 s padrão.
   }, 30_000);
 });

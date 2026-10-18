@@ -1,7 +1,7 @@
 // Temas de sala (puros): paletas claras e bem distintas. Sementes consecutivas (slots vizinhos)
 // recebem temas diferentes; a ordem da lista alterna famílias de cor de propósito.
 import type { RoomTheme } from './api';
-import type { OfficeTheme } from '../world/api';
+import type { DecorTheme } from '../world/api';
 
 const THEMES: readonly RoomTheme[] = [
   { carpet: '#c9d1dc', carpet2: '#bdc6d3', wall: { base: '#eef1f4', trim: '#9fb0c4', pattern: 'plain' }, accent: '#3f7fd8', deskVariant: 'white', chairVariant: 'blue' },
@@ -36,7 +36,7 @@ const ALIEN: readonly RoomTheme[] = [
 
 export const THEME_COUNT = THEMES.length;
 
-export function roomTheme(seed: number, officeTheme: OfficeTheme = 'original'): RoomTheme {
+export function roomTheme(seed: number, officeTheme: DecorTheme = 'original'): RoomTheme {
   const themes = officeTheme === 'medieval' ? MEDIEVAL : officeTheme === 'horror' ? HORROR : officeTheme === 'alien' ? ALIEN : THEMES;
   const n = themes.length;
   const t = themes[((Math.floor(seed) % n) + n) % n];

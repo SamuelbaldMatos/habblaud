@@ -74,10 +74,10 @@ export interface Summary {
 type Asked = { kind: 'ok'; summary: Summary } | { kind: 'offline' } | { kind: 'outdated' }
 
 interface ModEnv {
-  /** Config dir da conta e o id dela (basename), como o tap calcula; sem HOME nem CLAUDE_CONFIG_DIR, ausentes. */
+  /** Config dir da conta e o id dela (basename), como o tap calcula; sem HOME (ou USERPROFILE) nem CLAUDE_CONFIG_DIR, ausentes. */
   configDir?: string
   accountId?: string
-  /** Pasta do uso; ausente sem HOME nem HABBLAUD_USAGE_DIR. */
+  /** Pasta do uso; ausente sem HOME (ou USERPROFILE) nem HABBLAUD_USAGE_DIR. */
   usageDir?: string
   port: number
 }
@@ -86,13 +86,22 @@ interface ModEnv {
 // Funções puras (testadas em tests/habblaud.test.ts)
 // ---------------------------------------------------------------------------------------------
 
-/** Normaliza um caminho (barras repetidas, `.`, `..` e a barra do fim): o ambiente do mod não tem node:path. */
+/**
+ * Normaliza um caminho (barras repetidas, `.`, `..` e a barra do fim): o ambiente do mod não tem node:path.
+ * Caminhos do Windows (com drive ou UNC) saem com `/`, que o Windows também aceita, e a letra do drive (`C:`) conta
+ * como raiz: assim o servidor no Docker, que é Linux, ainda acha o nome da pasta da conta no configDir gravado. Nos
+ * outros, `\` é parte do nome (Linux e macOS) e fica como está.
+ */
 export function normalizePath(p: string): string {
   // Windows: `C:\Users\x` vira `C:/Users/x` (o Claude Code no Windows aceita as duas barras).
-  p = p.replace(/\\/g, '/')
-  const abs = p.startsWith('/')
+  const win = /^(?:[A-Za-z]:|\\\\)/.test(p)
+  const slashed = win ? p.replace(/\\/g, '/') : p
+  // Raiz: o drive, ou uma das duas barras do UNC (`\\nas\share` vira `//nas/share`, que precisa das duas).
+  const drive = /^[A-Za-z]:(?=\/|$)/.exec(slashed)?.[0] ?? (win && slashed.startsWith('//') ? '/' : '')
+  const rest = slashed.slice(drive.length)
+  const abs = rest.startsWith('/')
   const out: string[] = []
-  for (const seg of p.split('/')) {
+  for (const seg of rest.split('/')) {
     if (!seg || seg === '.') continue
     if (seg === '..') {
       if (out.length && out[out.length - 1] !== '..') out.pop()
@@ -102,7 +111,7 @@ export function normalizePath(p: string): string {
     out.push(seg)
   }
   const joined = out.join('/')
-  return abs ? `/${joined}` : joined || '.'
+  return drive + (abs ? `/${joined}` : joined || (drive ? '' : '.'))
 }
 
 /** `~` no começo vira o HOME (como o tap faz com CLAUDE_CONFIG_DIR e HABBLAUD_USAGE_DIR). */
@@ -251,7 +260,7 @@ let polling = false
 /** O ambiente da sessão, lido uma vez por carga (cada nome escrito por extenso, como a análise exige). */
 async function readEnv($: EngineInterface): Promise<ModEnv> {
   if (env) return env
-  // No Windows não existe HOME: sem o USERPROFILE o mod não sabia onde gravar e o uso nunca aparecia.
+  // No Windows, HOME só existe se alguém o definir: vale o USERPROFILE.
   const home = (await $.env.get('HOME'))?.trim() || (await $.env.get('USERPROFILE'))?.trim() || undefined
   const configDir = configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), home)
   const next: ModEnv = {

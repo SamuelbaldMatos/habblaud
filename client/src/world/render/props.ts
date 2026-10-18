@@ -2,7 +2,7 @@
 // visuais do mundo (sombra, brilhos). Mesma direção de arte do módulo de arte: contorno
 // cinza-azulado escuro, 3–4 tons por material, luz vinda de cima/esquerda.
 import { mulberry32 } from '../../../../shared/hash';
-import type { OfficeTheme } from '../api';
+import type { DecorTheme } from '../api';
 import type { ExteriorProp } from '../layout/types';
 
 export interface PropSprite {
@@ -322,7 +322,7 @@ function totemSprite(): PropSprite {
   return { canvas: c, ax: 7, ay: 32 };
 }
 
-function applyThemeTint(s: PropSprite, theme: OfficeTheme): PropSprite {
+function applyThemeTint(s: PropSprite, theme: DecorTheme): PropSprite {
   if (theme === 'original') return s;
   const [c, ctx] = makeCanvas(s.canvas.width, s.canvas.height);
   ctx.drawImage(s.canvas, 0, 0);
@@ -345,7 +345,7 @@ function applyThemeTint(s: PropSprite, theme: OfficeTheme): PropSprite {
   return { canvas: c, ax: s.ax, ay: s.ay };
 }
 
-export function propSprite(prop: ExteriorProp, theme: OfficeTheme = 'original'): PropSprite {
+export function propSprite(prop: ExteriorProp, theme: DecorTheme = 'original'): PropSprite {
   const baseKey = prop.kind === 'lamp' || prop.kind === 'bench' || prop.kind === 'totem' ? prop.kind : `${prop.kind}:${prop.seed % 7}`;
   const key = `${theme}:${baseKey}`;
   let s = cache.get(key);
@@ -400,7 +400,7 @@ const CAR_COLORS: [string, string, string][] = [
 ];
 
 /** Carro visto de lado (3/4), virado para a direita; `flip` desenha para a esquerda. */
-export function carSprite(variant: number, flip: boolean, theme: OfficeTheme = 'original'): PropSprite {
+export function carSprite(variant: number, flip: boolean, theme: DecorTheme = 'original'): PropSprite {
   const key = `car:${theme}:${variant % CAR_COLORS.length}:${flip ? 1 : 0}`;
   const hit = cache.get(key);
   if (hit) return hit;

@@ -1,12 +1,12 @@
 import { hash32 } from '../../../../shared/hash';
-import type { OfficeTheme } from '../../world/api';
+import type { DecorTheme } from '../../world/api';
 import type { Appearance, CharacterFrameRequest } from '../api';
 import type { PixelBuf } from '../core/pixbuf';
 import type { BufSprite } from '../core/sprite';
 import { appearanceKey } from './appearance';
 import { isSeated, renderCharacter } from './render';
 
-function themedAppearance(a: Appearance, theme: OfficeTheme): Appearance {
+function themedAppearance(a: Appearance, theme: DecorTheme): Appearance {
   if (theme === 'original') return a;
   const n = hash32(appearanceKey(a));
   if (theme === 'medieval') {
@@ -215,7 +215,7 @@ function drawAlien(b: PixelBuf, req: CharacterFrameRequest, n: number, rig: Cost
 }
 
 /** Costura e punhos respondem ao quadro do rig, mantendo legível até o gesto visto de costas. */
-function drawAnimatedCostumeDetails(b: PixelBuf, req: CharacterFrameRequest, theme: OfficeTheme, rig: CostumeRig): void {
+function drawAnimatedCostumeDetails(b: PixelBuf, req: CharacterFrameRequest, theme: DecorTheme, rig: CostumeRig): void {
   const even = Math.floor(req.frame) % 2 === 0;
   const color = theme === 'medieval' ? '#a78a58' : theme === 'horror' ? '#62575a' : '#42f5d4';
   const dark = theme === 'medieval' ? '#3c281c' : theme === 'horror' ? '#141216' : '#173f58';
@@ -235,7 +235,7 @@ function drawAnimatedCostumeDetails(b: PixelBuf, req: CharacterFrameRequest, the
   }
 }
 
-function decorateFrame(s: BufSprite, req: CharacterFrameRequest, theme: OfficeTheme, seed: number): BufSprite {
+function decorateFrame(s: BufSprite, req: CharacterFrameRequest, theme: DecorTheme, seed: number): BufSprite {
   if (theme === 'original') return s;
   const n = hash32(String(seed));
   const rig = costumeRig(req);
@@ -247,7 +247,7 @@ function decorateFrame(s: BufSprite, req: CharacterFrameRequest, theme: OfficeTh
 }
 
 /** Um sprite completo por direção × pose × quadro × item × estado sentado. */
-export function renderThemedCharacter(req: CharacterFrameRequest, theme: OfficeTheme, seed: number): BufSprite {
+export function renderThemedCharacter(req: CharacterFrameRequest, theme: DecorTheme, seed: number): BufSprite {
   const appearance = themedAppearance(req.appearance, theme);
   return decorateFrame(renderCharacter({ ...req, appearance }), req, theme, seed);
 }
