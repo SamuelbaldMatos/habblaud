@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
-import { lstat, open, readdir, readFile, realpath } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 export class AgentToolError extends Error {}
@@ -101,13 +101,22 @@ export interface PreparedWrite {
   expectedHash: string;
   /** Arquivo novo: a escrita usa O_EXCL (falha se alguém criar o arquivo enquanto aguardava aprovação). */
   create?: boolean;
+  /** Pastas que faltam no caminho do arquivo novo (relativas, de cima para baixo); criadas só depois da aprovação. */
+  newDirs?: string[];
 }
 
+/** Máximo de pastas novas que uma escrita cria de uma vez. */
+const MAX_NEW_DIRS = 4;
+
 /**
- * Caminho de um arquivo NOVO: as mesmas regras de resolveWorkspaceFile, a pasta-mãe tem de existir dentro do
- * workspace (sem symlinks no caminho) e o arquivo não pode existir.
+ * Caminho de um arquivo NOVO: as mesmas regras de resolveWorkspaceFile, sem symlinks no caminho e o arquivo não pode
+ * existir. As pastas que faltam (até 4, dentro do workspace) voltam em `newDirs` para criar depois da aprovação.
  */
 export async function resolveNewWorkspaceFile(rootDir: string, relativePath: unknown): Promise<string> {
+  return (await planNewWorkspaceFile(rootDir, relativePath)).path;
+}
+
+export async function planNewWorkspaceFile(rootDir: string, relativePath: unknown): Promise<{ path: string; newDirs: string[] }> {
   if (typeof relativePath !== 'string' || !relativePath.trim() || relativePath.includes('\0') || relativePath.includes('\\') || isAbsolute(relativePath)) {
     throw new AgentToolError('O caminho deve ser relativo e não vazio.');
   }
@@ -120,26 +129,39 @@ export async function resolveNewWorkspaceFile(rootDir: string, relativePath: unk
   const candidate = resolve(root, relativePath);
   if (!isWithin(root, candidate) || candidate === root) throw new AgentToolError('O caminho está fora do workspace.');
   let current = root;
+  let existing = root;
+  const newDirs: string[] = [];
   const dirs = relative(root, candidate).split(sep).slice(0, -1);
   for (const part of dirs) {
     current = resolve(current, part);
+    if (newDirs.length) {
+      newDirs.push(relative(root, current).split(sep).join('/'));
+      continue;
+    }
     let stat;
     try {
       stat = await lstat(current);
-    } catch {
-      throw new AgentToolError('A pasta do novo arquivo não existe; crie arquivos só em pastas existentes.');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      newDirs.push(relative(root, current).split(sep).join('/'));
+      continue;
     }
     if (stat.isSymbolicLink()) throw new AgentToolError('Acesso a symlinks não é permitido pelas ferramentas do agente.');
     if (!stat.isDirectory()) throw new AgentToolError('O caminho do novo arquivo passa por algo que não é pasta.');
+    existing = current;
   }
-  if ((await realpath(current)) !== current) throw new AgentToolError('O caminho canônico está fora do workspace.');
-  try {
-    await lstat(candidate);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return candidate;
-    throw error;
+  if (newDirs.length > MAX_NEW_DIRS) throw new AgentToolError(`O arquivo pediria ${newDirs.length} pastas novas; o limite é ${MAX_NEW_DIRS}.`);
+  if ((await realpath(existing)) !== existing) throw new AgentToolError('O caminho canônico está fora do workspace.');
+  if (!newDirs.length) {
+    try {
+      await lstat(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { path: candidate, newDirs };
+      throw error;
+    }
+    throw new AgentToolError('O arquivo já existe.');
   }
-  throw new AgentToolError('O arquivo já existe.');
+  return { path: candidate, newDirs };
 }
 
 export async function prepareWorkspaceWrite(rootDir: string, relativePath: unknown, content: unknown): Promise<PreparedWrite> {
@@ -151,14 +173,15 @@ export async function prepareWorkspaceWrite(rootDir: string, relativePath: unkno
     path = await resolveWorkspaceFile(rootDir, relativePath);
   } catch (error) {
     if (!(error instanceof AgentToolError) || error.message !== 'O arquivo solicitado não existe.') throw error;
-    const created = await resolveNewWorkspaceFile(rootDir, relativePath);
+    const plan = await planNewWorkspaceFile(rootDir, relativePath);
     return {
-      path: created,
-      relativePath: relative(await realpath(rootDir), created).split(sep).join('/'),
+      path: plan.path,
+      relativePath: relative(await realpath(rootDir), plan.path).split(sep).join('/'),
       oldContent: '',
       newContent: content,
       expectedHash: '',
       create: true,
+      ...(plan.newDirs.length ? { newDirs: plan.newDirs } : {}),
     };
   }
   if ((await lstat(path)).size > MAX_FILE_BYTES) throw new AgentToolError('O arquivo atual excede o limite de escrita de 128 KiB.');
@@ -175,8 +198,23 @@ export async function prepareWorkspaceWrite(rootDir: string, relativePath: unkno
 
 export async function applyWorkspaceWrite(rootDir: string, write: PreparedWrite): Promise<void> {
   if (write.create) {
-    const target = await resolveNewWorkspaceFile(rootDir, write.relativePath);
-    if (target !== write.path) throw new AgentToolError('O caminho do arquivo mudou enquanto aguardava aprovação.');
+    // Revalida depois da aprovação: só cria as pastas aprovadas, uma a uma, sem seguir links.
+    const plan = await planNewWorkspaceFile(rootDir, write.relativePath);
+    if (plan.path !== write.path || plan.newDirs.some((d) => !(write.newDirs ?? []).includes(d))) {
+      throw new AgentToolError('O caminho do arquivo mudou enquanto aguardava aprovação.');
+    }
+    const root = await realpath(rootDir);
+    for (const dir of plan.newDirs) {
+      const abs = resolve(root, ...dir.split('/'));
+      try {
+        await mkdir(abs);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+      const st = await lstat(abs);
+      if (st.isSymbolicLink() || !st.isDirectory()) throw new AgentToolError('A pasta criada deixou de ser uma pasta comum.');
+    }
+    const target = plan.path;
     const created = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o644);
     try {
       await created.writeFile(write.newContent, 'utf8');

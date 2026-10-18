@@ -190,19 +190,15 @@ describe('runtime multiagente: reanexação e ferramentas', () => {
     expect(runtime.list().find((job) => job.id === id)?.status).toBe('cancelled');
   });
 
-  it('aprova a criação em pasta existente e rejeita pasta inexistente', async () => {
+  it('cria arquivo novo e as pastas que faltam só depois da aprovação; recusa pasta protegida e mais de 4 pastas', async () => {
     const rootDir = workspace();
-    mkdirSync(join(rootDir, 'existente'));
     const complete: AgentModel = vi.fn(async () => {
       if (vi.mocked(complete).mock.calls.length === 1) {
         return {
           content: [
-            { type: 'tool_use', id: 'invalida', name: 'propose_file_write', input: {
-              path: 'ausente/arquivo.txt', content: 'não criar',
-            } },
-            { type: 'tool_use', id: 'valida', name: 'propose_file_write', input: {
-              path: 'existente/novo.txt', content: 'conteúdo aprovado',
-            } },
+            { type: 'tool_use', id: 'funda', name: 'propose_file_write', input: { path: 'a/b/c/d/e/arquivo.txt', content: 'não criar' } },
+            { type: 'tool_use', id: 'protegida', name: 'propose_file_write', input: { path: 'node_modules/pacote/x.txt', content: 'não criar' } },
+            { type: 'tool_use', id: 'valida', name: 'propose_file_write', input: { path: 'docs/novo/arquivo.md', content: 'conteúdo aprovado' } },
           ],
         };
       }
@@ -213,21 +209,18 @@ describe('runtime multiagente: reanexação e ferramentas', () => {
     const id = runtime.start({ message: 'Criar arquivo' }, (event) => events.push(event));
     const approval = await waitForEvent(events, 'approval');
 
-    expect(approval.approval).toMatchObject({
-      kind: 'write',
-      path: 'existente/novo.txt',
-      newContent: 'conteúdo aprovado',
-    });
-    expect(approval.approval?.summary.startsWith('Criar')).toBe(true);
-    expect(events).toContainEqual(expect.objectContaining({
-      type: 'tool_result',
-      result: expect.objectContaining({ tool: 'propose_file_write', ok: false }),
-    }));
+    expect(approval.approval).toMatchObject({ kind: 'write', path: 'docs/novo/arquivo.md', newContent: 'conteúdo aprovado' });
+    expect(approval.approval?.summary).toBe('Criar o arquivo docs/novo/arquivo.md (cria a pasta docs, docs/novo)');
+    // Nada é criado antes da aprovação.
+    expect(existsSync(join(rootDir, 'docs'))).toBe(false);
+    const failures = events.filter((e) => e.type === 'tool_result' && e.result?.ok === false);
+    expect(failures).toHaveLength(2);
     expect(runtime.approve(id, approval.approval!.id, 'approve')).toBe(true);
     await waitForDone(events);
 
-    expect(readFileSync(join(rootDir, 'existente/novo.txt'), 'utf8')).toBe('conteúdo aprovado');
-    expect(existsSync(join(rootDir, 'ausente/arquivo.txt'))).toBe(false);
+    expect(readFileSync(join(rootDir, 'docs/novo/arquivo.md'), 'utf8')).toBe('conteúdo aprovado');
+    expect(existsSync(join(rootDir, 'a'))).toBe(false);
+    expect(existsSync(join(rootDir, 'node_modules'))).toBe(false);
     expect(runtime.list().find((job) => job.id === id)?.status).toBe('done');
   });
 

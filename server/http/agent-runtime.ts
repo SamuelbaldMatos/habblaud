@@ -579,7 +579,7 @@ export class AgentRuntime {
         const approved = await this.waitForApproval(job, {
           id: '',
           kind: 'write',
-          summary: `${write.create ? 'Criar' : 'Substituir'} o arquivo ${write.relativePath}`,
+          summary: `${write.create ? 'Criar' : 'Substituir'} o arquivo ${write.relativePath}${write.newDirs?.length ? ` (cria a pasta ${write.newDirs.join(', ')})` : ''}`,
           path: write.relativePath,
           oldContent: write.oldContent,
           newContent: write.newContent,

@@ -247,6 +247,10 @@ export class StudioPanel implements UiComponent {
       placeholder: 'O que vamos programar? Ctrl+Enter envia.',
     },
   });
+  /** Receitas (roteiros do vibe-coding-toolkit adaptados): escolher uma preenche o pedido com o roteiro. */
+  private readonly recipe = h('select', { class: 'studio-recipe', attrs: { 'aria-label': 'Receitas de trabalho' } },
+    h('option', { text: 'Receitas…', attrs: { value: '' } }));
+  private recipes: Array<{ id: string; titulo: string; resumo: string; modo: string; corpo: string }> = [];
   private readonly send = action('Enviar', () => void this.sendMessage());
   private readonly stop = action('Parar', () => void this.cancelJob());
   private readonly refreshCard = action('Atualizar cartão', () => void this.loadProject(true));
@@ -304,6 +308,7 @@ export class StudioPanel implements UiComponent {
         h('div', { class: 'studio-composer' },
           this.input,
           h('div', { class: 'studio-actions' },
+            this.recipe,
             h('small', { class: 'studio-muted', text: 'Ctrl+Enter envia · Esc fecha sem cancelar' }),
             this.send, this.stop,
           ),
@@ -334,6 +339,7 @@ export class StudioPanel implements UiComponent {
       this.save();
       void this.loadProject();
     });
+    this.recipe.addEventListener('change', () => this.applyRecipe());
     this.input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && event.ctrlKey && !event.isComposing) {
         event.preventDefault();
@@ -952,6 +958,7 @@ export class StudioPanel implements UiComponent {
     void this.loadJobs(controller);
     void this.loadStatus(controller);
     void this.loadProject();
+    if (!this.recipes.length) void this.loadRecipes(controller);
     this.jobsTimer = window.setInterval(() => void this.loadJobs(controller), 5000);
     this.statusTimer = window.setInterval(() => void this.loadStatus(controller), 30000);
   }
@@ -970,6 +977,36 @@ export class StudioPanel implements UiComponent {
     const response = await fetch(url, { method, signal, cache: 'no-store' });
     if (!response.ok) throw new Error(`Falha ao consultar OmniRoute (HTTP ${response.status}).`);
     return obj(await response.json() as unknown);
+  }
+
+  private async loadRecipes(controller: AbortController): Promise<void> {
+    try {
+      const data = await this.getJson(`${API}/recipes`, controller.signal);
+      this.recipes = list(data.recipes).map(obj).filter((r) => str(r.id) && str(r.corpo)).map((r) => ({
+        id: str(r.id), titulo: str(r.titulo, str(r.id)), resumo: str(r.resumo), modo: str(r.modo), corpo: str(r.corpo),
+      }));
+      this.recipe.replaceChildren(
+        h('option', { text: this.recipes.length ? 'Receitas…' : 'Sem receitas', attrs: { value: '' } }),
+        ...this.recipes.map((r) => h('option', {
+          text: `${r.modo === 'escrita' ? '✎ ' : ''}${r.titulo}`, attrs: { value: r.id, title: r.resumo },
+        })),
+      );
+    } catch {
+      // Sem receitas o estúdio funciona igual.
+    }
+  }
+
+  /** Preenche o pedido com o roteiro da receita para o workspace atual (o usuário revisa antes de enviar). */
+  private applyRecipe(): void {
+    const r = this.recipes.find((item) => item.id === this.recipe.value);
+    this.recipe.value = '';
+    if (!r) return;
+    const workspace = this.state.workspace || 'o projeto selecionado';
+    this.input.value = `Receita: ${r.titulo}
+
+${r.corpo.split('{{workspace}}').join(workspace)}`;
+    this.input.focus();
+    this.input.setSelectionRange(0, 0);
   }
 
   private async loadWorkspaces(controller: AbortController): Promise<void> {

@@ -3,6 +3,8 @@ import { OmniStatusError, OmniStatusService } from '../omniroute/status';
 import type { AccountUsage } from '../../shared/types';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { loadRecipes } from './recipes';
+import type { Recipe } from './recipes';
 import { join } from 'node:path';
 import { HttpError, readJson, sendJson } from './app';
 import { isLoopbackAddress, isLoopbackHost } from './guard';
@@ -260,6 +262,8 @@ export function createOmnirouteHandler(opts: {
   const memory = process.env.HABBLAUD_CEREBRO_CLI && process.env.HABBLAUD_CEREBRO_PROJECT
     ? createAgentMemory({ cli: process.env.HABBLAUD_CEREBRO_CLI, project: process.env.HABBLAUD_CEREBRO_PROJECT }) : undefined;
   const workspaces = discoverWorkspaces(opts.rootDir, opts.roots ?? []);
+  // Receitas do estúdio: lidas na 1ª consulta e guardadas (mudam só com nova versão).
+  let recipes: Recipe[] | undefined;
   const projectContext = new ProjectContextCache({ cacheDir: opts.contextDir });
   const runtime = Object.keys(workspaces).length ? new AgentRuntime({
     workspaces, complete, memory,
@@ -492,6 +496,20 @@ export function createOmnirouteHandler(opts: {
             res.end();
           }
         });
+      return true;
+    }
+
+    if (path === '/api/omniroute/recipes') {
+      req.resume();
+      if (method !== 'GET') {
+        res.setHeader('Allow', 'GET');
+        sendJson(res, 405, { error: 'método não permitido' });
+      } else if (!localRequest(req, opts)) {
+        sendJson(res, 403, { error: 'o estúdio só aceita conexões locais' });
+      } else {
+        recipes ??= loadRecipes(process.env.HABBLAUD_RECIPES_DIR?.trim() || join(process.cwd(), 'shared', 'recipes'));
+        sendJson(res, 200, { recipes });
+      }
       return true;
     }
 

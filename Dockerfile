@@ -38,6 +38,8 @@ WORKDIR /app
 
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/dist ./dist
+# Receitas do estúdio de código (markdown lido em tempo de execução).
+COPY --from=builder /app/shared/recipes ./shared/recipes
 COPY --from=builder /app/node_modules /workspace/node_modules
 
 # O volume de dependências é preenchido a partir deste diretório na primeira inicialização.
