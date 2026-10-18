@@ -3,6 +3,7 @@ import type { UiComponent, UiContext } from './context';
 import { h, setAttr, setHidden, setText } from './dom';
 import { renderMarkdown } from './markdown';
 import { parseOmniRouteStreamEvent, type OmniRouteApproval } from './chat-stream';
+import { loadVoiceConfig, saveVoiceConfig, speechText, VoiceClient, VoicePlayer, VoiceRecorder, type VoiceConfig } from './studio-voice';
 import './studio.css';
 
 type Json = Record<string, unknown>;
@@ -340,6 +341,14 @@ export class StudioPanel implements UiComponent {
     h('option', { text: 'Receitas…', attrs: { value: '' } }));
   private recipes: Array<{ id: string; titulo: string; resumo: string; modo: string; corpo: string }> = [];
   private readonly send = action('Enviar', () => void this.sendMessage());
+  /** Voz do Jarvis pelo VoiceStudio local (127.0.0.1:3900): microfone vira pedido; resposta final é falada. */
+  private voiceCfg: VoiceConfig = loadVoiceConfig(typeof localStorage === 'undefined' ? undefined : localStorage);
+  private readonly voice = new VoiceClient(() => this.voiceCfg);
+  private readonly recorder = new VoiceRecorder();
+  private readonly player = new VoicePlayer();
+  private voiceBusy = false;
+  private readonly mic = action('🎤 Falar', () => void this.toggleMic());
+  private readonly speakToggle = action('', () => this.toggleSpeak());
   private readonly stop = action('Parar', () => void this.cancelJob());
   private readonly refreshCard = action('Atualizar cartão', () => void this.loadProject(true));
   private readonly newChat = action('Nova conversa', () => this.newConversation());
@@ -407,7 +416,7 @@ export class StudioPanel implements UiComponent {
           h('div', { class: 'studio-actions' },
             this.recipe,
             h('small', { class: 'studio-muted', text: 'Ctrl+Enter envia · Esc fecha sem cancelar' }),
-            this.send, this.stop,
+            this.mic, this.speakToggle, this.send, this.stop,
           ),
         ),
       ),
@@ -497,6 +506,7 @@ export class StudioPanel implements UiComponent {
       }
       this.startPolling();
       void this.loadThreads();
+      void this.checkVoice();
       this.el.focus();
       this.ctx.announce('Estúdio de código aberto.');
     } else {
@@ -516,6 +526,7 @@ export class StudioPanel implements UiComponent {
     this.send.disabled = active || !this.state.workspace;
     this.workspace.disabled = active;
     this.manager.disabled = active;
+    this.syncVoice();
     this.manager.value = this.state.manager;
     this.newChat.disabled = active && !this.state.jobId;
     this.stop.disabled = !active || !this.state.jobId || this.cancelling;
@@ -617,6 +628,64 @@ export class StudioPanel implements UiComponent {
         // Sem servidor de histórico a conversa continua no armazenamento local.
         .catch(() => undefined);
     }, 1500));
+  }
+
+  private syncVoice(): void {
+    setText(this.speakToggle, this.voiceCfg.speak ? '🔊 Voz ligada' : '🔇 Voz desligada');
+    setAttr(this.speakToggle, 'aria-pressed', String(this.voiceCfg.speak));
+    this.speakToggle.title = 'Falar as respostas do Jarvis (VoiceStudio local)';
+    setText(this.mic, this.recorder.recording ? '■ Parar e enviar' : this.voiceBusy ? 'Transcrevendo…' : '🎤 Falar');
+    this.mic.classList.toggle('is-active', this.recorder.recording);
+    this.mic.disabled = this.voiceBusy || (!this.recorder.recording && this.state.active);
+  }
+
+  private async checkVoice(): Promise<void> {
+    const ok = VoiceRecorder.supported() && await this.voice.available();
+    setHidden(this.mic, !ok);
+    setHidden(this.speakToggle, !ok);
+    this.syncVoice();
+  }
+
+  private toggleSpeak(): void {
+    this.voiceCfg = { ...this.voiceCfg, speak: !this.voiceCfg.speak };
+    saveVoiceConfig(typeof localStorage === 'undefined' ? undefined : localStorage, this.voiceCfg);
+    if (!this.voiceCfg.speak) this.player.stop();
+    this.syncVoice();
+  }
+
+  private async toggleMic(): Promise<void> {
+    if (this.voiceBusy) return;
+    try {
+      if (!this.recorder.recording) {
+        this.player.stop();
+        await this.recorder.start();
+        this.ctx.announce('Gravando. Clique de novo para enviar.');
+        this.syncVoice();
+        return;
+      }
+      this.voiceBusy = true;
+      this.syncVoice();
+      const text = await this.voice.transcribe(await this.recorder.stop());
+      if (!text) { this.report('Não entendi o áudio; tente de novo.'); return; }
+      this.input.value = this.input.value.trim() ? `${this.input.value.trim()}\n${text}` : text;
+      await this.sendMessage();
+    } catch (error) {
+      this.recorder.cancel();
+      this.report(`Voz: ${errorText(error)}`);
+    } finally {
+      this.voiceBusy = false;
+      this.syncVoice();
+    }
+  }
+
+  private speakLastReply(): void {
+    if (!this.voiceCfg.speak) return;
+    const last = [...this.state.messages].reverse().find((m) => m.role === 'assistant' && m.jobId === (this.state.jobId ?? undefined));
+    const text = last ? speechText(last.content) : '';
+    if (!text) return;
+    this.voice.synthesize(text)
+      .then((audio) => this.player.play(audio))
+      .catch((error: unknown) => this.report(`Voz: ${errorText(error)}`));
   }
 
   private async loadThreads(): Promise<void> {
@@ -969,6 +1038,7 @@ export class StudioPanel implements UiComponent {
   }
 
   private finish(label: string): void {
+    if (label === 'Tarefa concluída') this.speakLastReply();
     this.state.active = false;
     this.cancelling = false;
     for (const message of this.state.messages) {
