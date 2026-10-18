@@ -49,6 +49,7 @@ import { FreeArea } from './viewport';
 import { OmniChatPanel } from './chat';
 import type { DecorTheme } from '../world/api';
 import { tr } from '../../../shared/i18n';
+import { StudioPanel } from './studio';
 
 /** Relógio dos tempos relativos ("há 5 s"). */
 const CLOCK_MS = 5_000;
@@ -297,11 +298,14 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   const splash = new Splash(ctx);
   timelapse = new TimelapsePlayer(ctx);
   const omni = new OmniChatPanel(ctx);
+  // Estúdio de código em tela cheia (tecla E): conversa, aprovações, uso e cartão do projeto numa tela só.
+  const studio = new StudioPanel(ctx);
+  topbar.addPanelButton(studio.button);
   const scrim = h('div', { class: 'ui-scrim', attrs: { 'aria-hidden': 'true' }, on: { click: () => ctx.togglePanel('sidebar', false) } });
 
   root.classList.add('ui-root');
   root.dataset.officeTheme = prefs.officeTheme;
-  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, omni.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, popups.el, tip.el, settings.el, worldDialog.el, history.el, deliveries.el, help.el, renamer.el, live, splash.el);
+  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, omni.el, timelapse.el, timelapse.badge, studio.el, toasts.el, banner.el, update.el, empty.el, popups.el, tip.el, settings.el, worldDialog.el, history.el, deliveries.el, help.el, renamer.el, live, splash.el);
   // ?settings abre as Configurações (atalho do fork); fora do navegador (testes) não há location.
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('settings')) {
     requestAnimationFrame(() => settings.toggle(topbar.settingsBtn));
@@ -328,7 +332,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   void syncTheme();
   const themeTimer = setInterval(() => void syncTheme(), 2_000);
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster, worldDialog, popups, worldChip, omni];
+  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster, worldDialog, popups, worldChip, omni, studio];
   if (scene) components.push(scene);
   root.append(worldSocial.el);
   components.push(worldSocial);
