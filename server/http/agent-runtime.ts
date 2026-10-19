@@ -822,7 +822,7 @@ export class AgentRuntime {
         role: message.role,
         content: message.content.slice(0, 24_000),
       }));
-      messages.push({ role: 'user', content: input.message.slice(0, 24_000) });
+      messages.push({ role: 'user', content: input.message.slice(0, 60_000) });
       const jobTools = tools.filter((tool) =>
         (tool.name !== 'propose_learning' || !!this.options.memory)
         && (tool.name !== 'start_agent_session' || !!this.options.launcher));

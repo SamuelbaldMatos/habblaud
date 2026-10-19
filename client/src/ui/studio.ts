@@ -863,7 +863,17 @@ export class StudioPanel implements UiComponent {
             this.report('O servidor não possui mais esta tarefa. O histórico local foi preservado.');
             return;
           }
-          if (!response.ok) throw new Error(`Falha no stream (HTTP ${response.status}).`);
+          if (!response.ok) {
+            const reason = str(obj(await response.json().catch(() => ({}))).error);
+            // 4xx no POST: o servidor recusou antes de criar a tarefa; dá para corrigir e reenviar sem duplicar.
+            if (starting && response.status >= 400 && response.status < 500) {
+              this.finish('Pedido recusado pelo servidor');
+              this.input.value = str(requestBody?.message);
+              this.report(`O servidor recusou o pedido (HTTP ${response.status})${reason ? `: ${reason}` : ''}. Nenhuma tarefa foi criada; o texto voltou para a caixa para você ajustar e reenviar.`);
+              return;
+            }
+            throw new Error(`Falha no stream (HTTP ${response.status})${reason ? `: ${reason}` : ''}.`);
+          }
           if (!response.body) throw new Error('O servidor retornou um stream vazio.');
 
           setText(this.connection, 'Conectado');

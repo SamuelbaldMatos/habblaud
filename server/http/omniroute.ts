@@ -46,6 +46,10 @@ const ID_FIELD = /^[A-Za-z0-9._-]{1,64}$/;
 
 const MAX_MESSAGES = 20;
 const MAX_MESSAGE_LENGTH = 24_000;
+/** Pedido ao estúdio: planos colados passam fácil de 24 mil caracteres. */
+const MAX_AGENT_MESSAGE = 60_000;
+/** Cada item do histórico reenviado ao gerente. */
+const MAX_HISTORY_ITEM = 24_000;
 
 function parseChatRequest(value: unknown): Required<Pick<ChatRequest, 'combo' | 'messages'>> & Pick<ChatRequest, 'system'> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'corpo inválido');
@@ -120,11 +124,12 @@ export function localOmnirouteEndpoint(url: string, inDocker: boolean): URL {
   return endpoint;
 }
 
-function parseAgentRunRequest(value: unknown): AgentRunRequest {
+export function parseAgentRunRequest(value: unknown): AgentRunRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'corpo inválido');
   const request = value as { message?: unknown; messages?: unknown; workspace?: unknown; threadId?: unknown; manager?: unknown };
-  if (typeof request.message !== 'string' || !request.message.trim() || request.message.length > MAX_MESSAGE_LENGTH) {
-    throw new HttpError(400, 'mensagem inválida');
+  if (typeof request.message !== 'string' || !request.message.trim()) throw new HttpError(400, 'mensagem vazia');
+  if (request.message.length > MAX_AGENT_MESSAGE) {
+    throw new HttpError(400, `mensagem com ${request.message.length} caracteres; o limite é ${MAX_AGENT_MESSAGE}. Divida o pedido ou anexe o plano como arquivo no workspace.`);
   }
   const extra: Pick<AgentRunRequest, 'workspace' | 'threadId' | 'manager'> = {};
   if (request.manager !== undefined) {
@@ -138,19 +143,24 @@ function parseAgentRunRequest(value: unknown): AgentRunRequest {
     extra[key] = v;
   }
   if (request.messages === undefined) return { message: request.message.trim(), messages: [], ...extra };
-  if (!Array.isArray(request.messages) || request.messages.length > 10) throw new HttpError(400, 'histórico inválido');
-  const messages = request.messages.map((message) => {
+  if (!Array.isArray(request.messages)) throw new HttpError(400, 'histórico inválido');
+  // Histórico é contexto: item vazio é ignorado e item longo (uma resposta grande do gerente) fica com o final,
+  // em vez de recusar o pedido inteiro com 400.
+  const messages = request.messages.slice(-10).flatMap((message) => {
     if (
       !message ||
       typeof message !== 'object' ||
       !['user', 'assistant'].includes((message as ChatMessage).role) ||
-      typeof (message as ChatMessage).content !== 'string' ||
-      !(message as ChatMessage).content.trim() ||
-      (message as ChatMessage).content.length > MAX_MESSAGE_LENGTH
+      typeof (message as ChatMessage).content !== 'string'
     ) {
       throw new HttpError(400, 'mensagem de histórico inválida');
     }
-    return { role: (message as ChatMessage).role as 'user' | 'assistant', content: (message as ChatMessage).content };
+    const content = (message as ChatMessage).content;
+    if (!content.trim()) return [];
+    return [{
+      role: (message as ChatMessage).role as 'user' | 'assistant',
+      content: content.length > MAX_HISTORY_ITEM ? `[início cortado]\n${content.slice(-MAX_HISTORY_ITEM)}` : content,
+    }];
   });
   return { message: request.message.trim(), messages, ...extra };
 }
