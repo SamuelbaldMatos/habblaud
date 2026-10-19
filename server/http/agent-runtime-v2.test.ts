@@ -8,6 +8,7 @@ import {
   type AgentModel,
   type AgentModelReply,
   type AgentStreamEvent,
+  chargedInputTokens,
   stripPlaceholder,
 } from './agent-runtime';
 
@@ -451,5 +452,55 @@ describe('leitura numerada e Jarvis com contexto grande', () => {
     expect(jarvis).toContain('Contexto resumido para o Jarvis local');
     expect(jarvis.length).toBeLessThan(nuvem.length);
     expect(nuvem).toContain('m'.repeat(9_000));
+  });
+});
+
+describe('orçamento de tokens', () => {
+  it('não conta o cache duas vezes e cobra a leitura de cache a 10%', () => {
+    // Padrão OpenAI (o OmniRoute repassa assim do GPT): o cache já está dentro de input_tokens.
+    expect(chargedInputTokens(22_700, 0, 17_536)).toBe(5_164 + 1_754);
+    // Padrão Anthropic: input_tokens só com o que não veio do cache.
+    expect(chargedInputTokens(40, 200, 10_000)).toBe(40 + 200 + 1_000);
+    expect(chargedInputTokens(1_000, 0, 0)).toBe(1_000);
+  });
+
+  it('a tarefa com cache não esgota o orçamento como antes (3 etapas com contexto crescente)', async () => {
+    const rootDir = workspace();
+    writeFileSync(join(rootDir, 'a.ts'), 'const a = 1;\n');
+    const usage = (input: number, cache: number) => ({ input_tokens: input, output_tokens: 300, cache_read_input_tokens: cache });
+    const complete: AgentModel = vi.fn()
+      .mockResolvedValueOnce({ ...toolReply('read_file', { path: 'a.ts' }), usage: usage(10_875, 0) })
+      .mockResolvedValueOnce({ ...toolReply('list_files', {}), usage: usage(17_633, 10_752) })
+      .mockResolvedValueOnce({ ...finalReply(), usage: usage(22_700, 17_536) });
+    const runtime = new AgentRuntime({ rootDir, complete, maxTotalTokens: 60_000 });
+    const events: AgentStreamEvent[] = [];
+    runtime.start({ message: 'olhe a.ts' }, (event) => events.push(event));
+    await waitForDone(events);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(vi.mocked(complete)).toHaveBeenCalledTimes(3);
+  });
+
+  it('perto do fim do orçamento, o gerente é avisado para delegar ou encerrar', async () => {
+    const rootDir = workspace();
+    writeFileSync(join(rootDir, 'a.ts'), 'x'.repeat(30_000));
+    const complete: AgentModel = vi.fn()
+      .mockResolvedValueOnce({ ...toolReply('read_file', { path: 'a.ts' }), usage: { input_tokens: 100_000, output_tokens: 100 } })
+      .mockResolvedValueOnce(finalReply());
+    const runtime = new AgentRuntime({ rootDir, complete, maxTotalTokens: 140_000 });
+    const events: AgentStreamEvent[] = [];
+    runtime.start({ message: 'leia' }, (event) => events.push(event));
+    await waitForDone(events);
+    expect(vi.mocked(complete).mock.calls[0][0].system).not.toContain('ORÇAMENTO QUASE NO FIM');
+    expect(vi.mocked(complete).mock.calls[1][0].system).toContain('ORÇAMENTO QUASE NO FIM');
+  });
+
+  it('a instrução do gerente manda distribuir tarefa grande ao Claude Code', async () => {
+    const rootDir = workspace();
+    const complete: AgentModel = vi.fn(async () => finalReply());
+    const runtime = new AgentRuntime({ rootDir, complete });
+    const events: AgentStreamEvent[] = [];
+    runtime.start({ message: 'oi' }, (event) => events.push(event));
+    await waitForDone(events);
+    expect(vi.mocked(complete).mock.calls[0][0].system).toContain('você só DISTRIBUI');
   });
 });

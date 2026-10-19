@@ -52,7 +52,7 @@ describe('runtime multiagente', () => {
     if (mode === 'too-many-tools') reply.content = Array.from({ length: 9 }, (_, index) => ({ ...block, id: String(index) }));
     const complete: AgentModel = vi.fn(async () => reply);
     const events: AgentStreamEvent[] = [];
-    new AgentRuntime({ rootDir: process.cwd(), complete }).start({ message: 'Teste' }, event => events.push(event));
+    new AgentRuntime({ rootDir: process.cwd(), complete, maxTotalTokens: 120_000 }).start({ message: 'Teste' }, event => events.push(event));
     await waitForDone(events);
     expect(complete).toHaveBeenCalledTimes(1);
     expect(events.some(event => event.type === 'error')).toBe(true);
@@ -60,6 +60,7 @@ describe('runtime multiagente', () => {
   });
 
   it('aggregates manager, specialist and cached tokens in one budget', async () => {
+    // Fork: leitura de cache pesa 10% (chargedInputTokens): 7500 do gerente + 2300 do especialista.
     let calls = 0;
     const complete: AgentModel = vi.fn(async () => ++calls === 1
       ? { content: [{ type: 'tool_use', id: 's', name: 'consult_specialist', input: { combo: 'revisor', task: 'Revisar' } }], usage: { input_tokens: 1000, output_tokens: 1000, cache_read_input_tokens: 5000, cache_creation_input_tokens: 5000 } }
@@ -69,7 +70,7 @@ describe('runtime multiagente', () => {
     await waitForDone(events);
     expect(complete).toHaveBeenCalledTimes(2);
     expect(events.some(event => event.error?.includes('Orçamento'))).toBe(true);
-    expect(events.some(event => event.activity?.includes('17000/20000'))).toBe(true);
+    expect(events.some(event => event.activity?.includes('9800/20000'))).toBe(true);
   });
 
   it('keeps conservative usage when absent and does not record a conversation without writes', async () => {

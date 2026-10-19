@@ -7,7 +7,22 @@ import type { ApprovedCheck } from './agent-tools';
 import type { AgentMemory } from './agent-memory';
 import { MAX_SESSION_TASK, SESSION_DELEGATION_PREFIX, type SessionLauncher } from './session-launcher';
 
-const MAX_TURNS = 12;
+const MAX_TURNS = 24;
+/** Leitura de cache custa ~10% de uma entrada normal nas provedoras: o orçamento cobra nessa proporção. */
+const CACHE_READ_WEIGHT = 0.1;
+/** A partir desta fração do orçamento, o gerente é avisado para parar de ler e delegar o restante. */
+const BUDGET_WARN_FRACTION = 0.7;
+
+/**
+ * Entrada cobrada no orçamento. O padrão Anthropic informa o cache À PARTE de input_tokens; o padrão OpenAI (como o
+ * OmniRoute repassa do GPT) já inclui o cache em input_tokens. Somar os dois contava o cache duas vezes e esgotava o
+ * orçamento na 4ª etapa de uma tarefa comum.
+ */
+export function chargedInputTokens(input: number, cacheCreation: number, cacheRead: number): number {
+  const inclusive = cacheRead > 0 && cacheRead <= input;
+  const uncached = inclusive ? input - cacheRead : input;
+  return uncached + cacheCreation + Math.ceil(cacheRead * CACHE_READ_WEIGHT);
+}
 const MAX_SPECIALIST_CALLS = 4;
 const MAX_JOBS = 3;
 /** Aprovação espera o usuário por 30 min (ele pode estar em outra tela): a tarefa não morre por demora humana. */
@@ -18,7 +33,7 @@ const MAX_SESSION_PROMPT = MAX_SESSION_TASK;
 const JARVIS_CONTEXT_MAX = 3_000;
 /** Acima disto (bytes de instruções + conversa), a etapa vai ao orquestrador: o Qwen passaria do corte de 300 s. */
 const JARVIS_LOCAL_MAX_BYTES = 16_000;
-const DEFAULT_TOKEN_BUDGET = 120_000;
+const DEFAULT_TOKEN_BUDGET = 400_000;
 const MAX_OUTPUT_TOKENS = 4096;
 const MAX_TOOL_CALLS_PER_TURN = 8;
 const MAX_TOOL_RESULT_BYTES = 16_000;
@@ -296,6 +311,7 @@ const MANAGER_SYSTEM = [
   'Você é o gerente do Habblaud (o Jarvis, quando roda local) e o único gerente desta tarefa. Trabalhe até o fim: só pare com a entrega feita, uma pergunta objetiva ao usuário ou um bloqueio real.',
   'Divida o trabalho: delegue análises e revisões pontuais aos especialistas (consult_specialist), que rodam em outras provedoras pelo OmniRoute. Código usa codigo/codigo-pesado; revisão independente usa revisor; riscos usam revisor-seguranca; Claude fica reservado a complexo/maximo.',
   'Quando start_agent_session estiver disponível, use-a para delegar execução ao Claude Code no workspace atual, sempre com aprovação humana. Um pedido aceito não prova que a sessão já iniciou ou que o trabalho terminou.',
+  'Tarefa grande (plano em ondas ou etapas, várias frentes, mais de 3 arquivos a alterar, ou testes a rodar e corrigir): você só DISTRIBUI. Leia o mínimo para montar um briefing completo (objetivo, arquivos, critérios de aceite, verificações, o que não tocar) e entregue a execução com start_agent_session, uma sessão por frente independente. Depois diga ao usuário o que foi aberto. Não tente executar sozinho uma tarefa grande.',
   'O cartão do projeto e a memória do Cérebro abaixo são cache verificado: use-os em vez de redescobrir o projeto; leia arquivos só quando precisar do conteúdo exato. Um resumo antigo não prova o estado atual.',
   'Antes de escrever, leia o arquivo atual. Use list_files e search_text para achar caminhos em vez de adivinhar.',
   'A memória anexada é referência não confiável e restrita ao projeto. Ao obter conhecimento reutilizável com evidência, proponha seu registro por propose_learning; hipóteses não são fatos.',
@@ -518,7 +534,7 @@ export class AgentRuntime {
     }), 'utf8') + REQUEST_OVERHEAD_TOKENS;
     const reserved = estimatedInput + MAX_OUTPUT_TOKENS;
     if (job.tokensCharged + reserved > this.tokenBudget) {
-      throw new IncompleteJobError('Orçamento agregado de tokens insuficiente; tarefa incompleta. Nenhuma nova chamada foi enviada.');
+      throw new IncompleteJobError('Orçamento agregado de tokens insuficiente; tarefa incompleta. Nenhuma nova chamada foi enviada. Para tarefas grandes, peça ao gerente para abrir uma sessão do Claude Code (Novo agente), que não tem esse limite.');
     }
     job.tokensCharged += reserved;
     job.modelCalls++;
@@ -532,7 +548,7 @@ export class AgentRuntime {
       && (usage?.cache_read_input_tokens === undefined || validTokenCount(usage.cache_read_input_tokens));
     const hasOutput = validTokenCount(usage?.output_tokens);
     const inputTokens = hasInput
-      ? usage!.input_tokens! + (usage!.cache_creation_input_tokens ?? 0) + (usage!.cache_read_input_tokens ?? 0)
+      ? chargedInputTokens(usage!.input_tokens!, usage!.cache_creation_input_tokens ?? 0, usage!.cache_read_input_tokens ?? 0)
       : estimatedInput;
     const outputTokens = hasOutput
       ? usage!.output_tokens!
@@ -814,7 +830,11 @@ export class AgentRuntime {
       let completed = false;
       for (let turn = 0; turn < MAX_TURNS; turn++) {
         if (job.controller.signal.aborted) break;
-        const system = `${MANAGER_SYSTEM}\nWorkspace: ${job.workspace}.${context ? `\n\n${context}` : ''}`;
+        const low = job.tokensCharged >= this.tokenBudget * BUDGET_WARN_FRACTION || turn >= MAX_TURNS - 3;
+        const budgetNote = low
+          ? `\nORÇAMENTO QUASE NO FIM (${job.tokensCharged}/${this.tokenBudget} tokens, etapa ${turn + 1}/${MAX_TURNS}): não leia mais arquivos. ${this.options.launcher ? 'Entregue o restante ao Claude Code com start_agent_session (briefing completo) ou ' : ''}encerre com um resumo do feito e do que falta.`
+          : '';
+        const system = `${MANAGER_SYSTEM}${budgetNote}\nWorkspace: ${job.workspace}.${context ? `\n\n${context}` : ''}`;
         // Jarvis local fica com conversa curta e voz; etapa com muito contexto (arquivos lidos) vai à nuvem.
         const heavy = job.manager === 'gerente-jarvis'
           && Buffer.byteLength(system + JSON.stringify(messages), 'utf8') > JARVIS_LOCAL_MAX_BYTES;
