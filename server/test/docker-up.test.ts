@@ -1,4 +1,6 @@
 // Funções puras de scripts/docker-up.ts (importar o módulo não sobe nada).
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DetectedAccount } from '../accounts/detect';
@@ -11,6 +13,7 @@ import {
   copyVolumeArgs,
   type DockerState,
   envFileKeys,
+  findOmnirouteToken,
   hostTimeZone,
   parseArgs,
   planCodexMounts,
@@ -225,5 +228,20 @@ describe('docker-up: migração do nome antigo (CodeTown)', () => {
     expect(msg).toBe('variáveis do nome antigo ignoradas no .env: CODETOWN_BIND → HABBLAUD_BIND, CODETOWN_PORT → HABBLAUD_PORT. Renomeie para valer de novo.');
     expect(msg).not.toContain('0.0.0.0');
     expect(envFileKeys('')).toEqual([]);
+  });
+});
+
+
+describe('findOmnirouteToken (fork)', () => {
+  it('lê a chave do perfil omniroute mesmo com BOM no começo do arquivo', () => {
+    const home = mkdtempSync(join(tmpdir(), 'habblaud-token-'));
+    try {
+      const dir = join(home, '.claude', 'profiles', 'omniroute');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'settings.json'), '﻿' + JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: 'chave-de-teste' } }));
+      expect(findOmnirouteToken(home)).toBe('chave-de-teste');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

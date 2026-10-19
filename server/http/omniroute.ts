@@ -89,7 +89,8 @@ function resolveOmnirouteConfig(inDocker: boolean): { url: string; token?: strin
     try {
       const p = join(homedir(), '.claude', 'profiles', 'omniroute', 'settings.json');
       if (existsSync(p)) {
-        const raw = JSON.parse(readFileSync(p, 'utf8')) as { env?: Record<string, string> };
+        // Editores do Windows salvam com BOM; sem tirá-lo o JSON.parse falha e o estúdio fica sem chave.
+        const raw = JSON.parse(readFileSync(p, 'utf8').replace(/^﻿/, '')) as { env?: Record<string, string> };
         token = raw.env?.ANTHROPIC_AUTH_TOKEN || raw.env?.ANTHROPIC_API_KEY;
       }
     } catch {

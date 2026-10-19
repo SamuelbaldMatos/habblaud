@@ -308,7 +308,8 @@ export function findOmnirouteToken(home: string): string | undefined {
   try {
     const p = join(home, '.claude', 'profiles', 'omniroute', 'settings.json');
     if (statSync(p).isFile()) {
-      const raw = JSON.parse(readFileSync(p, 'utf8')) as { env?: Record<string, string> };
+      // Editores do Windows salvam com BOM; sem tirá-lo o JSON.parse falha e o container sobe sem chave.
+      const raw = JSON.parse(readFileSync(p, 'utf8').replace(/^﻿/, '')) as { env?: Record<string, string> };
       return raw.env?.ANTHROPIC_AUTH_TOKEN || raw.env?.ANTHROPIC_API_KEY;
     }
   } catch {
